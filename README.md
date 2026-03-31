@@ -235,3 +235,282 @@ douyindemo/
 │   └── templates/         # 视频模板/背景图
 └── requirements.txt       # Python依赖
 ```
+
+---
+
+## 九、环境准备与安装
+
+### 1. 前置要求
+
+- Python 3.10+
+- FFmpeg（视频合成必需）
+- 一个 AI API Key（OpenAI / 通义千问 / DeepSeek / Claude 任选其一）
+
+### 2. 安装 FFmpeg
+
+**Windows**（推荐用 winget 或 scoop）：
+```bash
+# winget
+winget install Gyan.FFmpeg
+
+# 或 scoop
+scoop install ffmpeg
+```
+
+安装后验证：
+```bash
+ffmpeg -version
+```
+
+### 3. 安装 Python 依赖
+
+```bash
+cd douyindemo
+pip install -r requirements.txt
+```
+
+### 4. 安装 Playwright 浏览器（自动发布需要）
+
+```bash
+playwright install chromium
+```
+
+### 5. 配置 API Key
+
+有两种方式，任选其一：
+
+**方式 A：环境变量（推荐）**
+
+```bash
+# OpenAI
+export OPENAI_API_KEY="sk-xxxxxxxx"
+
+# 如果用国内模型，额外设置 BASE_URL 和 MODEL
+# 通义千问
+export OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
+export OPENAI_MODEL="qwen-plus"
+
+# DeepSeek
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
+export OPENAI_MODEL="deepseek-chat"
+
+# Kimi
+export OPENAI_BASE_URL="https://api.moonshot.cn/v1"
+export OPENAI_MODEL="moonshot-v1-8k"
+
+# 如果用 Claude
+export CLAUDE_API_KEY="sk-ant-xxxxxxxx"
+```
+
+**方式 B：直接编辑 config.py**
+
+打开 `config.py`，找到对应的配置项修改即可。
+
+### 6. （可选）配置语音角色
+
+默认使用 `zh-CN-YunxiNeural`（男声），可在 `config.py` 中修改 `EDGE_TTS_VOICE`。
+
+查看所有可用中文语音：
+```bash
+python generate_voice.py --list-voices
+```
+
+常用语音：
+| 语音ID | 性别 | 风格 |
+|--------|------|------|
+| zh-CN-YunxiNeural | 男 | 年轻，适合讲书 |
+| zh-CN-YunjianNeural | 男 | 沉稳，适合深度解读 |
+| zh-CN-XiaoxiaoNeural | 女 | 温柔，适合情感类书籍 |
+| zh-CN-XiaoyiNeural | 女 | 活泼，适合书单推荐 |
+
+### 7. （可选）添加背景音乐
+
+将 MP3 文件放入 `assets/bgm/` 目录，合成视频时会自动随机选取一首作为背景音乐。
+
+建议使用 AI 生成的无版权音乐（Suno AI / 剪映音乐库导出）。
+
+### 8. （可选）添加自定义字体
+
+将 `.ttf` 或 `.otf` 字体文件放入 `assets/fonts/` 目录，会自动优先使用。
+
+不放的话默认使用系统字体（微软雅黑）。
+
+---
+
+## 十、使用方式
+
+### 核心命令
+
+```bash
+# 处理书单中下一本书（自动执行：文案→语音→视频）
+python main.py next
+
+# 批量处理 3 本
+python main.py batch --count 3
+
+# 处理书单中所有待处理的书
+python main.py batch --all
+
+# 指定视频时长为 90 秒（默认 60 秒）
+python main.py next --duration 90
+
+# 生成后自动发布到抖音
+python main.py next --publish
+
+# 批量生成并发布
+python main.py batch --all --publish
+
+# 重置所有书籍状态为 pending（重新开始）
+python main.py reset
+```
+
+### 单独使用各模块
+
+**单独生成文案：**
+```bash
+# 自动取书单中下一本
+python generate_script.py
+
+# 指定书名
+python generate_script.py --book "被讨厌的勇气"
+
+# 批量生成所有文案
+python generate_script.py --all
+
+# 指定时长（影响字数）
+python generate_script.py --duration 90
+```
+
+**单独生成语音：**
+```bash
+# 从文案文件生成语音
+python generate_voice.py --file output/scripts/被讨厌的勇气_20260331.txt
+
+# 直接输入文本
+python generate_voice.py --text "你有没有想过，为什么你总是在意别人的看法？"
+
+# 不生成字幕
+python generate_voice.py --file xxx.txt --no-subtitle
+
+# 查看所有可用语音
+python generate_voice.py --list-voices
+```
+
+**单独合成视频：**
+```bash
+python generate_video.py \
+  --voice output/voices/被讨厌的勇气_20260331.mp3 \
+  --subtitle output/voices/被讨厌的勇气_20260331.srt \
+  --title "被讨厌的勇气" \
+  --author "岸见一郎" \
+  --bgm assets/bgm/light_piano.mp3 \
+  --bgm-volume 0.2
+```
+
+**单独发布到抖音：**
+```bash
+# 首次使用：登录抖音（扫码，只需一次）
+python auto_publish.py login
+
+# 上传视频
+python auto_publish.py upload \
+  --video output/videos/被讨厌的勇气_20260331.mp4 \
+  --title "看完这本书，我才明白为什么你总是活得那么累" \
+  --tags 读书 好书推荐 心理学
+
+# 定时发布
+python auto_publish.py upload \
+  --video output/videos/xxx.mp4 \
+  --title "xxx" \
+  --time "2026-04-01 20:30"
+```
+
+### 管理书单
+
+编辑 `book_list.json` 即可添加新书，格式：
+
+```json
+{
+  "id": 11,
+  "title": "书名",
+  "author": "作者",
+  "category": "分类",
+  "description": "一句话简介（AI会基于此生成文案）",
+  "tags": ["标签1", "标签2"],
+  "status": "pending"
+}
+```
+
+status 字段说明：
+- `pending` — 待处理
+- `script_done` — 文案已生成
+- `done` — 全流程完成
+- `error` — 处理出错
+
+---
+
+## 十一、完整工作流示意
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  python main.py next                │
+└──────────────────────┬──────────────────────────────┘
+                       │
+          ┌────────────▼────────────┐
+          │  1. 从 book_list.json   │
+          │     取下一本 pending 书  │
+          └────────────┬────────────┘
+                       │
+          ┌────────────▼────────────┐
+          │  2. generate_script.py  │
+          │  调用 AI API 生成文案    │
+          │  → output/scripts/*.txt │
+          └────────────┬────────────┘
+                       │
+          ┌────────────▼────────────┐
+          │  3. generate_voice.py   │
+          │  Edge TTS 生成语音+字幕  │
+          │  → output/voices/*.mp3  │
+          │  → output/voices/*.srt  │
+          └────────────┬────────────┘
+                       │
+          ┌────────────▼────────────┐
+          │  4. generate_video.py   │
+          │  MoviePy 合成视频        │
+          │  语音+字幕+书名+BGM     │
+          │  → output/videos/*.mp4  │
+          └────────────┬────────────┘
+                       │
+          ┌────────────▼────────────┐
+          │  5. auto_publish.py     │
+          │  (可选) Playwright      │
+          │  自动发布到抖音          │
+          └─────────────────────────┘
+```
+
+---
+
+## 十二、常见问题
+
+### Q: 没有 API Key 怎么办？
+可以先手动写文案，只用语音合成+视频合成模块。Edge TTS 完全免费，不需要任何 Key。
+
+### Q: 视频没有背景音乐？
+在 `assets/bgm/` 目录放入 MP3 文件即可。没有的话视频只有语音，也能用。
+
+### Q: 字幕位置/大小不对？
+编辑 `config.py` 中的 `SUBTITLE_FONT_SIZE`、`TITLE_FONT_SIZE` 等参数调整。
+
+### Q: 如何更换 AI 模型？
+编辑 `config.py`，修改 `LLM_PROVIDER`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。支持所有 OpenAI 兼容接口的模型。
+
+### Q: 抖音发布失败？
+1. 先确认 Cookie 没过期：重新运行 `python auto_publish.py login`
+2. 查看 `output/videos/` 下的错误截图排查问题
+3. 抖音页面改版可能导致选择器失效，需要更新 `auto_publish.py` 中的选择器
+
+### Q: 如何提升视频质量？
+1. 在 `assets/templates/` 放入背景图片（后续版本支持）
+2. 用 AI 生成配图（Midjourney / 通义万相）替换纯色背景
+3. 使用更好的字体（推荐：思源黑体、阿里巴巴普惠体）
+4. 在 `config.py` 中调整 `VIDEO_FPS` 和编码参数

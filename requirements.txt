@@ -1,0 +1,16 @@
+# AI 文案生成
+openai>=1.0.0            # OpenAI 兼容接口（也适用于通义千问、Kimi等）
+anthropic>=0.30.0         # Claude API
+
+# 语音合成
+edge-tts>=6.1.0           # 微软 Edge TTS（免费，无需API Key）
+
+# 视频合成
+moviepy>=2.0.0            # 视频剪辑合成
+Pillow>=10.0.0            # 图片处理
+
+# 自动发布
+playwright>=1.40.0        # 浏览器自动化（用于抖音发布）
+
+# 工具
+requests>=2.31.0          # HTTP 请求

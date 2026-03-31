@@ -9,7 +9,7 @@ import json
 import sys
 from pathlib import Path
 
-from config import BASE_DIR
+from config import BASE_DIR, BGM_SOURCE
 from generate_script import (
     generate_script,
     load_book_list,
@@ -66,6 +66,8 @@ def pipeline_single(book: dict, duration: int = 60, publish: bool = False):
         subtitle_path=voice_result["subtitle_path"],
         book_title=title,
         book_author=author,
+        book=book,
+        script=script,
     )
     print(f"视频已生成: {video_path}")
 
@@ -79,11 +81,16 @@ def pipeline_single(book: dict, duration: int = 60, publish: bool = False):
         desc = f"《{title}》读书分享"
         all_tags = ["读书", "好书推荐", "书单"] + tags
 
+        # 如果 BGM 来源设置为 douyin，发布时使用抖音平台音乐
+        use_douyin_music = BGM_SOURCE == "douyin"
+
         success = asyncio.run(
             upload_video(
                 video_path=video_path,
                 title=desc,
                 tags=all_tags,
+                use_douyin_music=use_douyin_music,
+                book=book,
             )
         )
         if success:

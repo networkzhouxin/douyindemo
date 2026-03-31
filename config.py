@@ -69,6 +69,16 @@ DOUYIN_COOKIE_PATH = BASE_DIR / "douyin_cookie.json"
 # 发布时间设置（24小时制）
 PUBLISH_TIMES = ["07:30", "12:00", "20:30"]
 
+# ============ BGM 配置 ============
+# BGM 来源: "local"(本地匹配) | "download"(自动下载) | "douyin"(发布时用抖音音乐)
+BGM_SOURCE = "download"
+
+# Pixabay API（免费注册获取 Key: https://pixabay.com/api/docs/）
+PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "")
+
+# Freesound API（免费注册获取 Key: https://freesound.org/apiv2/apply/）
+FREESOUND_API_KEY = os.getenv("FREESOUND_API_KEY", "")
+
 # ============ 文案 Prompt 模板 ============
 SCRIPT_PROMPT_TEMPLATE = """请帮我把《{book_title}》这本书的核心观点提炼成一段{duration}秒的抖音短视频文案。
 

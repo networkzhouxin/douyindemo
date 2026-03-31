@@ -122,7 +122,39 @@
 | MoviePy (Python) | Python视频处理库，适合自动化 |
 | Remotion | 用代码(React)生成视频 |
 
-### 7. 封面/缩略图
+### 7. BGM 智能匹配（bgm_matcher.py）
+
+本项目内置了 BGM 智能匹配模块，支持三种模式：
+
+| 模式 | 说明 | 是否需要 API |
+|------|------|-------------|
+| rule（规则匹配） | 根据书籍分类自动映射到对应情绪的 BGM | 不需要 |
+| ai（AI分析） | 让 AI 分析文案情绪，再匹配对应 BGM | 需要 |
+| suno（AI生成） | 生成 Suno AI Prompt，为每本书定制原创 BGM | 手动操作 |
+| auto（自动） | 有 API Key 时用 AI 分析，否则降级为规则匹配 | 自适应 |
+
+**情绪分类与 BGM 目录：**
+
+```
+assets/bgm/
+├── calm/          ← 平静舒缓（心理学、哲学类书）
+├── inspiring/     ← 励志振奋（成长、效率、商业类书）
+├── emotional/     ← 感性温暖（情感、文学、人生感悟类书）
+├── thoughtful/    ← 沉思深邃（思维、哲学、科学类书）
+└── energetic/     ← 活力动感（书单推荐、快节奏盘点类）
+```
+
+只需将 BGM 文件放进对应情绪子目录，合成视频时会自动匹配。也支持直接把 BGM 放在 `assets/bgm/` 根目录，文件名包含情绪关键词（如 `calm_piano_01.mp3`）即可。
+
+**快捷命令：**
+```bash
+python bgm_matcher.py setup          # 创建情绪子目录
+python bgm_matcher.py guide          # 查看分类指南
+python bgm_matcher.py match --book "被讨厌的勇气"   # 测试匹配
+python bgm_matcher.py suno --book "认知觉醒"        # 生成 Suno Prompt
+```
+
+### 8. 封面/缩略图
 
 | 工具 | 说明 |
 |------|------|
@@ -223,7 +255,9 @@ douyindemo/
 ├── generate_script.py     # AI文案生成
 ├── generate_voice.py      # TTS语音合成
 ├── generate_video.py      # 视频合成（MoviePy）
-├── auto_publish.py        # 自动发布到抖音
+├── bgm_matcher.py         # BGM智能匹配（规则/AI情绪分析/Suno）
+├── download_bgm.py        # BGM自动搜索下载（Freesound等）
+├── auto_publish.py        # 自动发布到抖音（支持抖音平台音乐）
 ├── main.py                # 主流程：串联所有步骤
 ├── output/                # 输出目录
 │   ├── scripts/           # 生成的文案
@@ -231,7 +265,12 @@ douyindemo/
 │   └── videos/            # 合成的视频
 ├── assets/                # 静态资源
 │   ├── fonts/             # 字体文件
-│   ├── bgm/               # 背景音乐
+│   ├── bgm/               # 背景音乐（按情绪分子目录）
+│   │   ├── calm/          # 平静舒缓
+│   │   ├── inspiring/     # 励志振奋
+│   │   ├── emotional/     # 感性温暖
+│   │   ├── thoughtful/    # 沉思深邃
+│   │   └── energetic/     # 活力动感
 │   └── templates/         # 视频模板/背景图
 └── requirements.txt       # Python依赖
 ```
@@ -323,11 +362,56 @@ python generate_voice.py --list-voices
 | zh-CN-XiaoxiaoNeural | 女 | 温柔，适合情感类书籍 |
 | zh-CN-XiaoyiNeural | 女 | 活泼，适合书单推荐 |
 
-### 7. （可选）添加背景音乐
+### 7. 背景音乐（三种方案，无需手动下载）
 
-将 MP3 文件放入 `assets/bgm/` 目录，合成视频时会自动随机选取一首作为背景音乐。
+在 `config.py` 中设置 `BGM_SOURCE` 选择方案：
 
-建议使用 AI 生成的无版权音乐（Suno AI / 剪映音乐库导出）。
+```python
+BGM_SOURCE = "download"   # 方案A: 自动下载免费音乐（默认）
+BGM_SOURCE = "douyin"     # 方案B: 发布时直接用抖音平台音乐（最省事）
+BGM_SOURCE = "local"      # 方案C: 使用本地 assets/bgm/ 中的音乐
+```
+
+**方案 A：自动下载（推荐）**
+
+从 Freesound 等免费音乐库按情绪自动搜索下载，零手动操作：
+
+```bash
+# 需要先配置 Freesound API Key（免费注册）
+export FREESOUND_API_KEY="your-key"
+
+# 一键下载所有情绪分类的 BGM
+python download_bgm.py download
+
+# 只下载指定情绪
+python download_bgm.py download --mood calm --count 5
+```
+
+注册 Freesound API Key（免费）: https://freesound.org/apiv2/apply/
+
+没有 API Key 也没关系，运行主流程时如果检测到本地无 BGM 会自动尝试下载。
+
+**方案 B：使用抖音平台音乐（最省事，零版权风险）**
+
+视频生成时不加 BGM，在发布环节自动从抖音音乐库搜索添加。好处：
+- 完全零版权风险（抖音已购买授权）
+- 可以蹭热门音乐的流量
+- 抖音会根据音乐推荐流量
+
+```bash
+# 发布时自动添加抖音音乐
+python auto_publish.py upload --video xxx.mp4 --title "xxx" --douyin-music
+
+# 指定音乐搜索关键词
+python auto_publish.py upload --video xxx.mp4 --title "xxx" --douyin-music --music-keyword "轻音乐"
+```
+
+**方案 C：本地音乐**
+
+手动放 MP3 到 `assets/bgm/` 即可。没有 API Key 时可以查看免费下载指南：
+```bash
+python download_bgm.py guide
+```
 
 ### 8. （可选）添加自定义字体
 
@@ -475,14 +559,20 @@ status 字段说明：
           └────────────┬────────────┘
                        │
           ┌────────────▼────────────┐
-          │  4. generate_video.py   │
+          │  4. bgm_matcher.py      │
+          │  智能匹配背景音乐        │
+          │  (规则/AI情绪/Suno生成)  │
+          └────────────┬────────────┘
+                       │
+          ┌────────────▼────────────┐
+          │  5. generate_video.py   │
           │  MoviePy 合成视频        │
           │  语音+字幕+书名+BGM     │
           │  → output/videos/*.mp4  │
           └────────────┬────────────┘
                        │
           ┌────────────▼────────────┐
-          │  5. auto_publish.py     │
+          │  6. auto_publish.py     │
           │  (可选) Playwright      │
           │  自动发布到抖音          │
           └─────────────────────────┘

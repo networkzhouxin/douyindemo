@@ -57,12 +57,112 @@ async def login_douyin(playwright):
     print("登录完成，Cookie 已保存，后续发布无需再次登录。")
 
 
+async def add_douyin_music(page, music_keyword: str = "读书"):
+    """
+    在抖音发布页面添加平台音乐
+
+    上传视频后，在发布页面点击"选择音乐"，搜索并添加抖音平台上的音乐。
+    这样可以直接使用抖音的正版音乐库，零版权风险，还能蹭热门音乐流量。
+
+    Args:
+        page: Playwright page 对象
+        music_keyword: 搜索关键词（如"读书"、"轻音乐"、"钢琴"）
+    """
+    try:
+        # 查找并点击"选择音乐"或"配乐"按钮
+        music_btn = await page.query_selector(
+            'text="选择音乐", text="配乐", text="添加音乐", '
+            'button:has-text("音乐"), div:has-text("选择配乐")'
+        )
+        if not music_btn:
+            # 尝试更宽泛的选择器
+            music_btn = await page.query_selector('[class*="music"], [class*="audio"]')
+
+        if not music_btn:
+            print("  未找到音乐选择按钮，跳过（可能页面已改版）")
+            return False
+
+        await music_btn.click()
+        time.sleep(2)
+
+        # 在搜索框输入关键词
+        search_input = await page.query_selector(
+            'input[placeholder*="搜索"], input[placeholder*="音乐"], '
+            'input[type="text"][class*="search"]'
+        )
+        if search_input:
+            await search_input.fill(music_keyword)
+            await page.keyboard.press("Enter")
+            time.sleep(2)
+
+        # 选择第一首音乐（通常是热门/推荐的）
+        # 查找"使用"按钮或音乐列表的第一项
+        use_btn = await page.query_selector(
+            'text="使用", button:has-text("使用"), '
+            'text="添加", button:has-text("添加")'
+        )
+        if use_btn:
+            await use_btn.click()
+            time.sleep(1)
+            print(f"  已添加抖音平台音乐（搜索: {music_keyword}）")
+            return True
+
+        # 如果没找到"使用"按钮，尝试点击音乐列表第一项
+        first_music = await page.query_selector(
+            '[class*="music-item"]:first-child, '
+            '[class*="audio-item"]:first-child'
+        )
+        if first_music:
+            await first_music.click()
+            time.sleep(1)
+            print(f"  已选择抖音平台音乐（搜索: {music_keyword}）")
+            return True
+
+        print("  未能自动选择音乐，请稍后手动添加")
+        return False
+
+    except Exception as e:
+        print(f"  添加音乐失败: {e}，跳过")
+        return False
+
+
+# 读书类视频常用的音乐搜索关键词
+DOUYIN_MUSIC_KEYWORDS = {
+    "calm": ["轻音乐", "钢琴曲", "安静读书", "舒缓纯音乐"],
+    "inspiring": ["励志背景音乐", "正能量", "热血", "奋斗"],
+    "emotional": ["感人音乐", "温暖", "治愈", "深情"],
+    "thoughtful": ["沉思", "空灵", "氛围感", "冥想音乐"],
+    "energetic": ["节奏感", "活力", "卡点音乐", "热门BGM"],
+    "default": ["读书BGM", "轻音乐", "纯音乐背景", "知识分享"],
+}
+
+
+def get_douyin_music_keyword(book: dict = None, mood: str = None) -> str:
+    """根据书籍信息或情绪获取抖音音乐搜索关键词"""
+    import random
+
+    if mood and mood in DOUYIN_MUSIC_KEYWORDS:
+        return random.choice(DOUYIN_MUSIC_KEYWORDS[mood])
+
+    if book:
+        category = book.get("category", "")
+        from bgm_matcher import CATEGORY_TO_MOOD
+        mood = CATEGORY_TO_MOOD.get(category, "default")
+        keywords = DOUYIN_MUSIC_KEYWORDS.get(mood, DOUYIN_MUSIC_KEYWORDS["default"])
+        return random.choice(keywords)
+
+    return random.choice(DOUYIN_MUSIC_KEYWORDS["default"])
+
+
 async def upload_video(
     video_path: str | Path,
     title: str,
     tags: list[str] = None,
     publish_time: str = None,
     headless: bool = False,
+    use_douyin_music: bool = False,
+    music_keyword: str = None,
+    book: dict = None,
 ):
     """
     上传视频到抖音创作者平台
@@ -73,6 +173,9 @@ async def upload_video(
         tags: 标签列表，如 ["读书", "好书推荐"]
         publish_time: 定时发布时间，格式 "2024-01-01 20:00"，None 表示立即发布
         headless: 是否无头模式运行
+        use_douyin_music: 是否使用抖音平台音乐（而非视频自带的BGM）
+        music_keyword: 抖音音乐搜索关键词（不指定则根据书籍自动选择）
+        book: 书籍信息（用于自动选择音乐关键词）
     """
     from playwright.async_api import async_playwright
 
@@ -138,7 +241,13 @@ async def upload_video(
 
             time.sleep(1)
 
-            # 5. 定时发布（可选）
+            # 5. 添加抖音平台音乐（可选）
+            if use_douyin_music:
+                keyword = music_keyword or get_douyin_music_keyword(book=book)
+                print(f"正在添加抖音音乐（关键词: {keyword}）...")
+                await add_douyin_music(page, keyword)
+
+            # 6. 定时发布（可选）
             if publish_time:
                 # 点击定时发布选项
                 schedule_radio = await page.query_selector('text="定时发布"')
@@ -152,7 +261,7 @@ async def upload_video(
                     if time_input:
                         await time_input.fill(publish_time)
 
-            # 6. 点击发布
+            # 7. 点击发布
             time.sleep(2)
             publish_btn = await page.wait_for_selector(
                 'button:has-text("发布")', timeout=10000
@@ -228,6 +337,14 @@ if __name__ == "__main__":
     upload_parser.add_argument("--tags", type=str, nargs="+", help="标签列表")
     upload_parser.add_argument("--time", type=str, help="定时发布时间 (如 2024-01-01 20:00)")
     upload_parser.add_argument("--headless", action="store_true", help="无头模式")
+    upload_parser.add_argument(
+        "--douyin-music", action="store_true",
+        help="使用抖音平台音乐（不使用视频自带BGM）",
+    )
+    upload_parser.add_argument(
+        "--music-keyword", type=str,
+        help="抖音音乐搜索关键词（如: 轻音乐、读书BGM）",
+    )
 
     args = parser.parse_args()
 
@@ -248,6 +365,8 @@ if __name__ == "__main__":
                 tags=args.tags,
                 publish_time=args.time,
                 headless=args.headless,
+                use_douyin_music=args.douyin_music,
+                music_keyword=args.music_keyword,
             )
         )
     else:

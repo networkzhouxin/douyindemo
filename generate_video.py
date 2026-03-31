@@ -126,8 +126,21 @@ def find_font() -> str:
     return "Arial"  # fallback
 
 
-def find_bgm() -> Path | None:
-    """从 BGM 目录随机选择一首背景音乐"""
+def find_bgm(book: dict = None, script: str = None) -> Path | None:
+    """
+    智能匹配背景音乐
+
+    优先使用 bgm_matcher 智能匹配，失败则随机选择
+    """
+    try:
+        from bgm_matcher import match_bgm
+        result = match_bgm(book=book, script=script, mode="auto")
+        if result:
+            return result
+    except ImportError:
+        pass
+
+    # 兜底：随机选择
     bgm_files = list(BGM_DIR.glob("*.mp3")) + list(BGM_DIR.glob("*.wav"))
     if bgm_files:
         return random.choice(bgm_files)
@@ -141,6 +154,8 @@ def generate_video(
     book_author: str = "",
     bgm_path: str | Path | None = None,
     bgm_volume: float = 0.15,
+    book: dict = None,
+    script: str = None,
 ) -> Path:
     """
     合成最终视频
@@ -150,8 +165,10 @@ def generate_video(
         subtitle_path: SRT字幕文件路径（可选）
         book_title: 书名（显示在视频顶部）
         book_author: 作者（显示在书名下方）
-        bgm_path: 背景音乐路径（不指定则自动从 assets/bgm 选取）
+        bgm_path: 背景音乐路径（不指定则自动智能匹配）
         bgm_volume: 背景音乐音量（0-1）
+        book: 书籍信息字典（用于智能匹配 BGM）
+        script: 文案文本（用于 AI 分析情绪匹配 BGM）
 
     Returns:
         输出视频文件路径
@@ -237,7 +254,7 @@ def generate_video(
     audio_tracks = [voice_clip]
 
     if bgm_path is None:
-        bgm_path = find_bgm()
+        bgm_path = find_bgm(book=book, script=script)
 
     if bgm_path and Path(bgm_path).exists():
         bgm_clip = AudioFileClip(str(bgm_path))

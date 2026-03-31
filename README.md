@@ -88,10 +88,17 @@
 | 录屏翻书 | 微信读书/Kindle截屏 | 最简单的方式 |
 | 虚拟人/数字人 | HeyGen、D-ID、腾讯智影、硅基流动 | 生成虚拟主播讲书 |
 
-**推荐组合**：
-- 入门：剪映文字模板 + 书封面图片
-- 进阶：通义万相/可灵生成AI图片 + 文字动画
-- 高级：数字人出镜（硅基流动/腾讯智影）
+**本项目内置方案（generate_images.py，无需外部API）：**
+- 根据书籍分类自动选择主题配色（5套配色方案）
+- 自动生成渐变背景 + 装饰光点效果
+- 自动生成书籍封面卡片（书名+作者+装饰线条）
+- 自动将文案拆分为多段，每段生成独立的金句卡片
+- 自动生成片头（书名+钩子文案）和片尾（点赞关注CTA）
+- 画面之间有淡入淡出转场效果
+
+**进阶方案**：
+- 通义万相/可灵生成AI图片 + 文字动画
+- 数字人出镜（硅基流动/腾讯智影）
 
 ### 4. 字幕自动生成
 
@@ -254,7 +261,8 @@ douyindemo/
 ├── book_list.json         # 书单数据库
 ├── generate_script.py     # AI文案生成
 ├── generate_voice.py      # TTS语音合成
-├── generate_video.py      # 视频合成（MoviePy）
+├── generate_images.py     # 画面帧生成（Pillow，无需外部API）
+├── generate_video.py      # 视频合成（画面帧+语音+字幕+音乐）
 ├── bgm_matcher.py         # BGM智能匹配（规则/AI情绪分析/Suno）
 ├── download_bgm.py        # BGM自动搜索下载（Freesound等）
 ├── auto_publish.py        # 自动发布到抖音（支持抖音平台音乐）

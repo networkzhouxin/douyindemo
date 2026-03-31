@@ -1,6 +1,12 @@
 """
 视频合成模块
-使用 MoviePy 将语音、字幕、背景、音乐合成为最终视频
+使用 MoviePy 将画面帧、语音、字幕、音乐合成为最终视频
+
+画面效果：
+- 分段画面切换（片头→多个内容卡片→片尾），不再是一张静态图
+- 每段画面有渐变/主题色背景 + 书籍卡片 + 金句卡片
+- 画面之间有淡入淡出转场
+- 字幕实时同步显示
 """
 
 import random
@@ -9,10 +15,11 @@ from pathlib import Path
 
 from moviepy import (
     AudioFileClip,
-    ColorClip,
     CompositeAudioClip,
     CompositeVideoClip,
+    ImageClip,
     TextClip,
+    concatenate_audioclips,
     concatenate_videoclips,
 )
 
@@ -20,13 +27,10 @@ from config import (
     VIDEO_WIDTH,
     VIDEO_HEIGHT,
     VIDEO_FPS,
-    VIDEO_BG_COLOR,
     SUBTITLE_FONT_SIZE,
     SUBTITLE_FONT_COLOR,
     SUBTITLE_STROKE_COLOR,
     SUBTITLE_STROKE_WIDTH,
-    TITLE_FONT_SIZE,
-    TITLE_FONT_COLOR,
     VIDEOS_DIR,
     BGM_DIR,
     FONTS_DIR,
@@ -70,10 +74,7 @@ def _srt_time_to_seconds(time_str: str) -> float:
 
 
 def group_subtitles(subtitles: list[dict], max_chars: int = 15) -> list[dict]:
-    """
-    将逐字字幕合并为逐句字幕（每组最多 max_chars 个字）
-    使字幕更易阅读
-    """
+    """将逐字字幕合并为逐句字幕"""
     if not subtitles:
         return []
 
@@ -94,7 +95,6 @@ def group_subtitles(subtitles: list[dict], max_chars: int = 15) -> list[dict]:
         else:
             current_text += sub["text"]
 
-    # 最后一组
     if current_text:
         grouped.append({
             "start": current_start,
@@ -107,31 +107,25 @@ def group_subtitles(subtitles: list[dict], max_chars: int = 15) -> list[dict]:
 
 def find_font() -> str:
     """查找可用的中文字体"""
-    # 优先使用项目内的字体
     for font_file in FONTS_DIR.glob("*.ttf"):
         return str(font_file)
     for font_file in FONTS_DIR.glob("*.otf"):
         return str(font_file)
 
-    # Windows 系统字体
     system_fonts = [
-        "C:/Windows/Fonts/msyh.ttc",      # 微软雅黑
-        "C:/Windows/Fonts/simhei.ttf",     # 黑体
-        "C:/Windows/Fonts/simsun.ttc",     # 宋体
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simhei.ttf",
+        "C:/Windows/Fonts/simsun.ttc",
     ]
     for f in system_fonts:
         if Path(f).exists():
             return f
 
-    return "Arial"  # fallback
+    return "Arial"
 
 
 def find_bgm(book: dict = None, script: str = None) -> Path | None:
-    """
-    智能匹配背景音乐
-
-    优先使用 bgm_matcher 智能匹配，失败则随机选择
-    """
+    """智能匹配背景音乐"""
     try:
         from bgm_matcher import match_bgm
         result = match_bgm(book=book, script=script, mode="auto")
@@ -140,7 +134,6 @@ def find_bgm(book: dict = None, script: str = None) -> Path | None:
     except ImportError:
         pass
 
-    # 兜底：随机选择
     bgm_files = list(BGM_DIR.glob("*.mp3")) + list(BGM_DIR.glob("*.wav"))
     if bgm_files:
         return random.choice(bgm_files)
@@ -158,70 +151,38 @@ def generate_video(
     script: str = None,
 ) -> Path:
     """
-    合成最终视频
+    合成最终视频（带画面帧切换）
+
+    自动生成画面帧（背景+书籍卡片+金句卡片），分段切换，
+    配合字幕同步、背景音乐，输出完整的短视频。
 
     Args:
         voice_path: 语音文件路径
-        subtitle_path: SRT字幕文件路径（可选）
-        book_title: 书名（显示在视频顶部）
-        book_author: 作者（显示在书名下方）
-        bgm_path: 背景音乐路径（不指定则自动智能匹配）
+        subtitle_path: SRT字幕文件路径
+        book_title: 书名
+        book_author: 作者
+        bgm_path: 背景音乐路径（不指定则自动匹配）
         bgm_volume: 背景音乐音量（0-1）
-        book: 书籍信息字典（用于智能匹配 BGM）
-        script: 文案文本（用于 AI 分析情绪匹配 BGM）
-
-    Returns:
-        输出视频文件路径
+        book: 书籍信息字典
+        script: 文案文本
     """
     voice_path = Path(voice_path)
     font = find_font()
+    category = book.get("category", "") if book else ""
 
-    # 1. 加载语音，确定视频时长
+    # 1. 加载语音
     voice_clip = AudioFileClip(str(voice_path))
     duration = voice_clip.duration
 
-    # 2. 创建背景
-    bg_clip = ColorClip(
-        size=(VIDEO_WIDTH, VIDEO_HEIGHT),
-        color=VIDEO_BG_COLOR,
-        duration=duration,
-    )
+    # 2. 生成画面帧图片
+    frame_paths = _generate_frames(book_title, book_author, category, script)
 
-    layers = [bg_clip]
+    # 3. 将画面帧分配到时间轴上（带转场）
+    bg_video = _build_frame_sequence(frame_paths, duration)
 
-    # 3. 添加书名标题
-    if book_title:
-        title_text = f"《{book_title}》"
-        title_clip = (
-            TextClip(
-                text=title_text,
-                font_size=TITLE_FONT_SIZE,
-                color=TITLE_FONT_COLOR,
-                font=font,
-                size=(VIDEO_WIDTH - 100, None),
-                method="caption",
-                text_align="center",
-            )
-            .with_duration(duration)
-            .with_position(("center", 200))
-        )
-        layers.append(title_clip)
+    layers = [bg_video]
 
-    if book_author:
-        author_clip = (
-            TextClip(
-                text=f"作者：{book_author}",
-                font_size=36,
-                color="gray",
-                font=font,
-                text_align="center",
-            )
-            .with_duration(duration)
-            .with_position(("center", 290))
-        )
-        layers.append(author_clip)
-
-    # 4. 添加字幕
+    # 4. 添加字幕层
     if subtitle_path:
         subtitle_path = Path(subtitle_path)
         if subtitle_path.exists():
@@ -243,14 +204,14 @@ def generate_video(
                     )
                     .with_start(sub["start"])
                     .with_end(sub["end"])
-                    .with_position(("center", VIDEO_HEIGHT // 2))
+                    .with_position(("center", int(VIDEO_HEIGHT * 0.65)))
                 )
                 layers.append(sub_clip)
 
     # 5. 合成视频
     video = CompositeVideoClip(layers, size=(VIDEO_WIDTH, VIDEO_HEIGHT))
 
-    # 6. 混合音频（语音 + 背景音乐）
+    # 6. 音频混合（语音 + BGM）
     audio_tracks = [voice_clip]
 
     if bgm_path is None:
@@ -258,17 +219,13 @@ def generate_video(
 
     if bgm_path and Path(bgm_path).exists():
         bgm_clip = AudioFileClip(str(bgm_path))
-        # 循环背景音乐以匹配视频时长
         if bgm_clip.duration < duration:
-            loops_needed = int(duration / bgm_clip.duration) + 1
-            bgm_clip = concatenate_videoclips(
-                [bgm_clip] * loops_needed
-            ).subclipped(0, duration)
+            loops = int(duration / bgm_clip.duration) + 1
+            bgm_clip = concatenate_audioclips([bgm_clip] * loops).subclipped(0, duration)
         else:
             bgm_clip = bgm_clip.subclipped(0, duration)
 
         bgm_clip = bgm_clip.with_volume_scaled(bgm_volume)
-        # 添加淡入淡出
         bgm_clip = bgm_clip.audio_fadein(2).audio_fadeout(3)
         audio_tracks.append(bgm_clip)
 
@@ -290,11 +247,94 @@ def generate_video(
         logger="bar",
     )
 
-    # 清理
     voice_clip.close()
     video.close()
 
     return output_path
+
+
+def _generate_frames(
+    book_title: str,
+    book_author: str,
+    category: str,
+    script: str,
+) -> list[Path]:
+    """
+    生成视频画面帧
+
+    优先使用 generate_images 模块生成精美画面；
+    如果该模块不可用（如缺少 Pillow），则回退到纯色帧。
+    """
+    try:
+        from generate_images import generate_all_frames
+        if script:
+            return generate_all_frames(
+                book_title, book_author, category, script
+            )
+    except ImportError:
+        print("generate_images 模块不可用，使用纯色背景")
+    except Exception as e:
+        print(f"画面生成出错: {e}，使用纯色背景")
+
+    return []
+
+
+def _build_frame_sequence(
+    frame_paths: list[Path],
+    total_duration: float,
+    crossfade: float = 0.8,
+) -> CompositeVideoClip | ImageClip:
+    """
+    将多张画面帧图片组合成视频序列，带淡入淡出转场
+
+    Args:
+        frame_paths: 图片路径列表
+        total_duration: 总时长
+        crossfade: 转场时长（秒）
+    """
+    from config import VIDEO_BG_COLOR
+
+    if not frame_paths:
+        # 无帧图片，使用纯色背景
+        from moviepy import ColorClip
+        return ColorClip(
+            size=(VIDEO_WIDTH, VIDEO_HEIGHT),
+            color=VIDEO_BG_COLOR,
+            duration=total_duration,
+        )
+
+    n = len(frame_paths)
+
+    if n == 1:
+        return (
+            ImageClip(str(frame_paths[0]))
+            .resized((VIDEO_WIDTH, VIDEO_HEIGHT))
+            .with_duration(total_duration)
+        )
+
+    # 计算每帧时长（考虑交叉淡化的重叠）
+    # 有效时长 = sum(帧时长) - (n-1)*crossfade = total_duration
+    # 帧时长 = (total_duration + (n-1)*crossfade) / n
+    frame_duration = (total_duration + (n - 1) * crossfade) / n
+    frame_duration = max(frame_duration, crossfade + 0.5)  # 至少比转场长
+
+    clips = []
+    for path in frame_paths:
+        clip = (
+            ImageClip(str(path))
+            .resized((VIDEO_WIDTH, VIDEO_HEIGHT))
+            .with_duration(frame_duration)
+        )
+        clips.append(clip)
+
+    # 使用 crossfadein/crossfadeout 实现转场
+    video = concatenate_videoclips(clips, method="compose", padding=-crossfade)
+
+    # 裁剪到精确时长
+    if video.duration > total_duration:
+        video = video.subclipped(0, total_duration)
+
+    return video
 
 
 # ============ 命令行入口 ============
@@ -306,9 +346,20 @@ if __name__ == "__main__":
     parser.add_argument("--subtitle", type=str, help="SRT字幕文件路径")
     parser.add_argument("--title", type=str, default="", help="书名")
     parser.add_argument("--author", type=str, default="", help="作者")
+    parser.add_argument("--category", type=str, default="", help="书籍分类")
+    parser.add_argument("--script", type=str, help="文案文本（用于生成画面）")
+    parser.add_argument("--script-file", type=str, help="文案文件路径")
     parser.add_argument("--bgm", type=str, help="背景音乐路径")
     parser.add_argument("--bgm-volume", type=float, default=0.15, help="背景音乐音量(0-1)")
     args = parser.parse_args()
+
+    script_text = args.script
+    if args.script_file:
+        script_text = Path(args.script_file).read_text(encoding="utf-8")
+
+    book_info = None
+    if args.category:
+        book_info = {"category": args.category}
 
     output = generate_video(
         voice_path=args.voice,
@@ -317,5 +368,7 @@ if __name__ == "__main__":
         book_author=args.author,
         bgm_path=args.bgm,
         bgm_volume=args.bgm_volume,
+        book=book_info,
+        script=script_text,
     )
     print(f"视频已生成：{output}")

@@ -4,6 +4,7 @@ anthropic>=0.30.0         # Claude API
 
 # 语音合成
 edge-tts>=6.1.0           # 微软 Edge TTS（免费，无需API Key）
+pyttsx3>=2.90              # 离线语音合成（Edge TTS连不上时的备选方案）
 
 # 视频合成
 moviepy>=2.0.0            # 视频剪辑合成

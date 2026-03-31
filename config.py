@@ -35,12 +35,19 @@ CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "your-claude-api-key-here")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6-20250514")
 
 # ============ TTS 语音合成配置 ============
-# 支持: "edge" (微软Edge免费TTS) | "azure" | "volcengine" (火山引擎/豆包)
+# 支持: "edge" (微软Edge免费TTS) | "azure" | "offline" (离线pyttsx3)
 TTS_PROVIDER = "edge"
 
 # Edge TTS（免费，无需API Key）
 EDGE_TTS_VOICE = "zh-CN-YunxiNeural"  # 男声，适合讲书
 # 其他可选: zh-CN-XiaoxiaoNeural(女声), zh-CN-YunjianNeural(男声沉稳)
+EDGE_TTS_MAX_RETRIES = 3       # Edge TTS 连接失败时的最大重试次数
+EDGE_TTS_RETRY_DELAY = 5       # 重试间隔（秒）
+
+# 网络代理（如果 Edge TTS 连不上微软服务器，可以设置代理）
+# 格式: "http://127.0.0.1:7890" 或 "socks5://127.0.0.1:1080"
+HTTP_PROXY = os.getenv("HTTP_PROXY", "")
+HTTPS_PROXY = os.getenv("HTTPS_PROXY", "")
 
 # Azure TTS
 AZURE_TTS_KEY = os.getenv("AZURE_TTS_KEY", "")

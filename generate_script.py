@@ -1,10 +1,10 @@
 """
 文案生成模块
-调用 AI API 自动生成读书类短视频文案
+支持一书多集: AI 先规划选题，再为每个选题生成独立文案
 """
 
 import json
-import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -15,149 +15,288 @@ from config import (
     OPENAI_MODEL,
     CLAUDE_API_KEY,
     CLAUDE_MODEL,
-    SCRIPTS_DIR,
     SCRIPT_PROMPT_TEMPLATE,
+    TOPIC_PLAN_PROMPT,
+    EPISODES_PER_BOOK,
     BASE_DIR,
+    get_book_output_dir,
 )
 
 
+# ============================================================
+# 书单管理
+# ============================================================
+
 def load_book_list() -> list[dict]:
-    """读取书单数据库"""
     book_list_path = BASE_DIR / "book_list.json"
+    if not book_list_path.exists():
+        return []
     with open(book_list_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def save_book_list(books: list[dict]):
-    """保存书单数据库"""
     book_list_path = BASE_DIR / "book_list.json"
     with open(book_list_path, "w", encoding="utf-8") as f:
         json.dump(books, f, ensure_ascii=False, indent=2)
 
 
 def get_next_pending_book(books: list[dict]) -> dict | None:
-    """获取下一本待处理的书"""
     for book in books:
         if book.get("status") == "pending":
             return book
     return None
 
 
-def build_prompt(book: dict, duration: int = 60) -> str:
-    """根据书籍信息构建 Prompt"""
-    word_count = duration * 4  # 每秒约4个字
-    return SCRIPT_PROMPT_TEMPLATE.format(
+# ============================================================
+# LLM 调用
+# ============================================================
+
+def _call_llm(prompt: str, system: str = "", max_tokens: int = 2000) -> str:
+    if LLM_PROVIDER == "claude":
+        import anthropic
+        client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+        response = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=max_tokens,
+            system=system or "You are a helpful assistant.",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text.strip()
+    else:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=messages,
+            temperature=0.8,
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content.strip()
+
+
+# ============================================================
+# 选题规划: 为一本书生成多个视频选题
+# ============================================================
+
+def plan_topics(book: dict, episode_count: int = None) -> list[dict]:
+    """
+    AI 分析一本书，规划多个视频选题
+
+    Returns:
+        [{"episode": 1, "title": "...", "angle": "...", "type": "...", "key_points": "..."}, ...]
+    """
+    episode_count = episode_count or EPISODES_PER_BOOK
+
+    prompt = TOPIC_PLAN_PROMPT.format(
         book_title=book["title"],
         book_desc=book["description"],
-        duration=duration,
-        word_count=word_count,
+        episode_count=episode_count,
     )
 
-
-def generate_with_openai(prompt: str) -> str:
-    """使用 OpenAI 兼容接口生成文案"""
-    from openai import OpenAI
-
-    client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
-    response = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": "你是一个专业的短视频文案创作者，擅长将书籍内容转化为引人入胜的口播文案。"},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.8,
-        max_tokens=1000,
+    result = _call_llm(
+        prompt,
+        system="你是一个专业的短视频内容策划师，擅长从书籍中挖掘多个有话题性的选题。",
+        max_tokens=3000,
     )
-    return response.choices[0].message.content.strip()
+
+    # 提取 JSON
+    json_match = re.search(r'\[.*\]', result, re.DOTALL)
+    if json_match:
+        topics = json.loads(json_match.group())
+        # 确保 episode 编号正确
+        for i, topic in enumerate(topics):
+            topic["episode"] = i + 1
+        return topics
+
+    raise ValueError(f"AI 返回的选题格式无法解析: {result[:200]}")
 
 
-def generate_with_claude(prompt: str) -> str:
-    """使用 Claude API 生成文案"""
-    import anthropic
+def save_topic_plan(book: dict, topics: list[dict], output_dir: Path = None) -> Path:
+    """保存选题规划到书籍目录"""
+    if output_dir is None:
+        output_dir = get_book_output_dir(book["title"])
 
-    client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
-    response = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=1000,
-        system="你是一个专业的短视频文案创作者，擅长将书籍内容转化为引人入胜的口播文案。",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.content[0].text.strip()
+    filepath = output_dir / "topic_plan.json"
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump({
+            "book_title": book["title"],
+            "book_author": book["author"],
+            "total_episodes": len(topics),
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "topics": topics,
+        }, f, ensure_ascii=False, indent=2)
+
+    return filepath
 
 
-def generate_script(book: dict, duration: int = 60) -> str:
+def load_topic_plan(book_title: str) -> list[dict] | None:
+    """加载已有的选题规划"""
+    book_dir = get_book_output_dir(book_title)
+    filepath = book_dir / "topic_plan.json"
+    if filepath.exists():
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("topics", [])
+    return None
+
+
+# ============================================================
+# 单集文案生成
+# ============================================================
+
+def generate_script(book: dict, duration: int = 60, episode: dict = None) -> str:
     """
-    为指定书籍生成文案
+    为指定书籍的某一集生成文案
 
     Args:
-        book: 书籍信息字典
-        duration: 视频时长（秒）
-
-    Returns:
-        生成的文案文本
+        book: 书籍信息
+        duration: 视频时长(秒)
+        episode: 选题信息(不传则生成通用文案)
     """
-    prompt = build_prompt(book, duration)
+    word_count = duration * 4
 
-    if LLM_PROVIDER == "claude":
-        script = generate_with_claude(prompt)
+    if episode:
+        prompt = SCRIPT_PROMPT_TEMPLATE.format(
+            book_title=book["title"],
+            book_desc=book["description"],
+            episode_title=episode.get("title", ""),
+            episode_angle=episode.get("angle", ""),
+            episode_type=episode.get("type", ""),
+            episode_key_points=episode.get("key_points", ""),
+            duration=duration,
+            word_count=word_count,
+        )
     else:
-        script = generate_with_openai(prompt)
+        # 兼容旧的单集模式
+        prompt = SCRIPT_PROMPT_TEMPLATE.format(
+            book_title=book["title"],
+            book_desc=book["description"],
+            episode_title="核心观点解读",
+            episode_angle="提炼全书最核心的2-3个观点",
+            episode_type="核心观点",
+            episode_key_points=book["description"],
+            duration=duration,
+            word_count=word_count,
+        )
 
-    return script
+    return _call_llm(
+        prompt,
+        system="你是一个专业的短视频文案创作者，擅长将书籍内容转化为引人入胜的口播文案。",
+        max_tokens=1000,
+    )
 
 
-def save_script(book: dict, script: str) -> Path:
-    """
-    保存文案到文件
+def save_script(book: dict, script: str, output_dir: Path = None, episode: dict = None) -> Path:
+    """保存文案到对应目录"""
+    if output_dir is None:
+        output_dir = get_book_output_dir(book["title"])
 
-    Returns:
-        文案文件路径
-    """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_title = book["title"].replace(" ", "_").replace("/", "_")
-    filename = f"{safe_title}_{timestamp}.txt"
-    filepath = SCRIPTS_DIR / filename
+    filepath = output_dir / "script.txt"
 
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(f"书名：{book['title']}\n")
-        f.write(f"作者：{book['author']}\n")
-        f.write(f"分类：{book['category']}\n")
-        f.write(f"标签：{', '.join(book['tags'])}\n")
-        f.write(f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"书名: {book['title']}\n")
+        f.write(f"作者: {book['author']}\n")
+        f.write(f"分类: {book['category']}\n")
+        if episode:
+            f.write(f"第 {episode.get('episode', '?')} 集: {episode.get('title', '')}\n")
+            f.write(f"选题类型: {episode.get('type', '')}\n")
+            f.write(f"切入角度: {episode.get('angle', '')}\n")
+        f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write("-" * 40 + "\n\n")
         f.write(script)
 
     return filepath
 
 
-def process_next_book(duration: int = 60) -> dict | None:
+# ============================================================
+# 一书多集: 批量生成
+# ============================================================
+
+def generate_all_episodes(
+    book: dict,
+    episode_count: int = None,
+    duration: int = 60,
+) -> list[dict]:
     """
-    处理书单中下一本待处理的书：生成文案并保存
+    为一本书生成全部集数的文案
+
+    流程: 规划选题 -> 逐集生成文案 -> 保存
 
     Returns:
-        包含 book, script, filepath 的字典，或 None（无待处理的书）
+        [{"episode": dict, "script": str, "output_dir": Path}, ...]
     """
-    books = load_book_list()
-    book = get_next_pending_book(books)
+    episode_count = episode_count or EPISODES_PER_BOOK
+    book_dir = get_book_output_dir(book["title"])
 
-    if not book:
-        print("书单中没有待处理的书了！")
-        return None
+    # Step 1: 规划选题(或加载已有规划)
+    topics = load_topic_plan(book["title"])
+    if topics and len(topics) >= episode_count:
+        print(f"  使用已有选题规划({len(topics)} 个选题)")
+    else:
+        print(f"  正在为《{book['title']}》规划 {episode_count} 个选题...")
+        topics = plan_topics(book, episode_count)
+        save_topic_plan(book, topics, book_dir)
+        print(f"  选题规划完成:")
+        for t in topics:
+            print(f"    EP{t['episode']:02d} [{t.get('type','')}] {t['title']}")
 
-    print(f"正在为《{book['title']}》生成文案...")
-    script = generate_script(book, duration)
-    filepath = save_script(book, script)
+    # Step 2: 逐集生成文案
+    results = []
+    for topic in topics[:episode_count]:
+        ep_num = topic["episode"]
+        safe_title = re.sub(r'[\\/:*?"<>|]', '', topic.get("title", ""))[:20]
+        ep_dir = book_dir / f"ep{ep_num:02d}_{safe_title}"
+        ep_dir.mkdir(parents=True, exist_ok=True)
 
-    # 更新书单状态
-    for b in books:
-        if b["id"] == book["id"]:
-            b["status"] = "script_done"
-            break
-    save_book_list(books)
+        # 检查是否已有文案
+        script_file = ep_dir / "script.txt"
+        if script_file.exists():
+            print(f"  EP{ep_num:02d} 文案已存在，跳过")
+            script = script_file.read_text(encoding="utf-8")
+            # 提取正文(去掉头部信息)
+            if "-" * 40 in script:
+                script = script.split("-" * 40, 1)[-1].strip()
+            results.append({"episode": topic, "script": script, "output_dir": ep_dir})
+            continue
 
-    print(f"文案已保存到：{filepath}")
-    print(f"文案字数：{len(script)}")
-    return {"book": book, "script": script, "filepath": filepath}
+        print(f"  EP{ep_num:02d} 正在生成文案: {topic['title']}...")
+        script = generate_script(book, duration, episode=topic)
+        save_script(book, script, output_dir=ep_dir, episode=topic)
+        print(f"    字数: {len(script)}")
+
+        results.append({"episode": topic, "script": script, "output_dir": ep_dir})
+
+    return results
+
+
+def get_pending_episodes(book: dict) -> list[dict]:
+    """
+    获取一本书中尚未生成视频的集数
+
+    通过检查每集目录下是否存在 video.mp4 来判断
+    """
+    book_dir = get_book_output_dir(book["title"])
+
+    # 加载选题规划
+    topics = load_topic_plan(book["title"])
+    if not topics:
+        return []
+
+    pending = []
+    for topic in topics:
+        ep_num = topic["episode"]
+        safe_title = re.sub(r'[\\/:*?"<>|]', '', topic.get("title", ""))[:20]
+        ep_dir = book_dir / f"ep{ep_num:02d}_{safe_title}"
+
+        if not (ep_dir / "video.mp4").exists():
+            pending.append({**topic, "_output_dir": ep_dir})
+
+    return pending
 
 
 # ============ 命令行入口 ============
@@ -165,32 +304,30 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="读书类短视频文案生成器")
-    parser.add_argument("--book", type=str, help="指定书名（不指定则自动取书单中下一本）")
-    parser.add_argument("--duration", type=int, default=60, help="视频时长（秒），默认60")
-    parser.add_argument("--all", action="store_true", help="批量生成所有待处理书籍的文案")
+    parser.add_argument("--book", type=str, help="指定书名")
+    parser.add_argument("--duration", type=int, default=60, help="视频时长(秒)")
+    parser.add_argument("--episodes", type=int, help=f"生成集数(默认{EPISODES_PER_BOOK})")
+    parser.add_argument("--plan-only", action="store_true", help="只生成选题规划，不生成文案")
     args = parser.parse_args()
 
-    if args.all:
-        count = 0
-        while True:
-            result = process_next_book(args.duration)
-            if result is None:
-                break
-            count += 1
-            print(f"--- 已完成 {count} 本 ---\n")
-        print(f"全部完成！共生成 {count} 篇文案。")
-    elif args.book:
+    if args.book:
         books = load_book_list()
-        target = None
-        for b in books:
-            if b["title"] == args.book:
-                target = b
-                break
-        if target:
-            script = generate_script(target, args.duration)
-            filepath = save_script(target, script)
-            print(f"文案已保存到：{filepath}")
-        else:
+        target = next((b for b in books if b["title"] == args.book), None)
+        if not target:
             print(f"书单中没有找到《{args.book}》")
+        elif args.plan_only:
+            topics = plan_topics(target, args.episodes)
+            for t in topics:
+                print(f"  EP{t['episode']:02d} [{t.get('type','')}] {t['title']}")
+                print(f"         {t.get('angle', '')}")
+        else:
+            results = generate_all_episodes(target, args.episodes, args.duration)
+            print(f"\n完成! 共生成 {len(results)} 集文案")
     else:
-        process_next_book(args.duration)
+        books = load_book_list()
+        book = get_next_pending_book(books)
+        if book:
+            results = generate_all_episodes(book, args.episodes, args.duration)
+            print(f"\n完成! 共生成 {len(results)} 集文案")
+        else:
+            print("书单中没有待处理的书了!")

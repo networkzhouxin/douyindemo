@@ -1,614 +1,745 @@
-# 读书类抖音账号 — 完整落地方案
+# 读书类抖音账号 - 全自动内容生产线
 
-## 一、账号定位
+一套完整的 Python 自动化工具，从选书到发布全流程覆盖：
 
-### 1. 选择细分方向
+**书单采集 -> 选题规划(一书多集) -> AI文案 -> TTS语音 -> 画面合成 -> 视频导出 -> 自动发布**
 
-| 方向 | 示例 | 特点 |
+---
+
+## 目录
+
+- [项目能力概览](#一项目能力概览)
+- [快速开始](#二快速开始)
+- [项目结构](#三项目结构)
+- [核心命令](#四核心命令)
+- [各模块详细说明](#五各模块详细说明)
+- [配置参考](#六配置参考)
+- [风控与安全策略](#七风控与安全策略)
+- [已知局限与建议](#八已知局限与建议)
+- [账号运营指南](#九账号运营指南)
+- [常见问题](#十常见问题)
+- [外部工具参考](#十一外部工具参考)
+
+---
+
+## 一、项目能力概览
+
+| 环节 | 能力 | 依赖 |
 |------|------|------|
-| 书单推荐 | "打工人必读的5本书" | 门槛低，起号快，但同质化严重 |
-| 拆书/精华解读 | 每本书浓缩成1-3分钟 | 有深度，粉丝粘性强 |
-| 金句/名言 | 书中经典段落+文字动画 | 最适合自动化批量生产 |
-| 读书vlog | 记录读书过程/书房 | 需要真人出镜 |
-| 故事型 | 把书的内容讲成故事 | 完播率高，但对文案要求高 |
-| 特定领域 | 只讲心理学/历史/商业书 | 垂直度高，变现容易 |
+| 书单采集 | 豆瓣热门榜爬取 + AI 智能推荐，自动去重补充 | 网络 / LLM API |
+| 选题规划 | AI 为每本书自动拆解 5-10 个不同角度的视频选题 | LLM API |
+| 文案生成 | 按选题逐集生成口播文案，支持 OpenAI/Claude/国内模型 | LLM API |
+| 语音合成 | Edge TTS(免费) + 说话风格/智能停顿，失败自动降级离线 | 网络(可离线) |
+| 声音克隆 | 录10-30秒样本，后续所有视频用你自己的声音(GPT-SoVITS/Fish Audio) | 本地GPU 或 API |
+| 画面生成 | Pillow 自动生成主题配色卡片(5套配色)，分段切换+转场 | 无 |
+| 数字人 | 上传一张照片，自动生成口播数字人视频(SadTalker/HeyGen) | 本地GPU 或 API |
+| BGM匹配 | 按书籍分类自动匹配情绪/自动下载/支持抖音平台音乐 | 可选 API |
+| 视频合成 | MoviePy 合成竖屏视频(1080x1920)，语音+字幕+画面+BGM | FFmpeg |
+| 自动发布 | Playwright 模拟浏览器发布到抖音，支持定时发布 | Playwright |
+| 风控安全 | 敏感词检测、每日限额、操作随机化、跨平台差异化 | 无 |
 
-**建议新手从「金句/书单推荐」入手**，最适合自动化，门槛最低。
+### 一书多集示例
 
-### 2. 账号人设
+一本《被讨厌的勇气》自动拆出：
 
-- **账号名**：简洁好记，带"书/读/阅"等关键词（如：三分钟读书、书虫小张）
-- **头像**：书本/阅读相关的简约设计
-- **简介**：一句话说清楚你是谁+你能提供什么（如："每天一本好书精华，帮你省下80%的阅读时间"）
-- **封面统一模板**：保持视觉一致性
-
-### 3. 目标受众
-
-- 职场人（效率/管理/沟通类书）
-- 学生（成长/学习方法类书）
-- 女性群体（情感/心理/自我提升类书）
-
----
-
-## 二、内容制作全流程
-
-一条读书类视频的完整生产链：
-
-```
-选书 → 提炼内容/文案 → 生成语音 → 制作背景视频 → 添加字幕 → 配背景音乐 → 合成导出
-```
-
----
-
-## 三、自动化工具链
-
-### 1. 文案自动生成
-
-| 工具 | 说明 | 适用场景 |
-|------|------|----------|
-| ChatGPT / Claude | 输入书名或核心内容，自动生成拆书文案、金句、书单文案 | 最通用 |
-| Kimi (月之暗面) | 支持上传整本书PDF，自动总结 | 长文档处理 |
-| 通义千问 | 阿里出品，中文效果好 | 中文文案 |
-| Coze (扣子) | 字节旗下，可搭建自动化工作流（Bot） | 搭建自动化流水线 |
-
-**Prompt 示例**：
-
-```
-请帮我把《被讨厌的勇气》这本书的核心观点提炼成一段60秒的抖音短视频文案。
-要求：
-1. 开头3秒要有钩子（引起好奇心）
-2. 中间讲2-3个核心观点
-3. 结尾有金句总结+引导关注
-4. 口语化，像在跟朋友聊天
-5. 总字数控制在250字左右
-```
-
-### 2. AI 语音生成（TTS）
-
-| 工具 | 特点 | 价格 |
+| 集数 | 类型 | 选题 |
 |------|------|------|
-| 剪映（内置TTS） | 质量高，多种音色，直接在剪映里用 | 免费 |
-| 微软 Azure TTS | 效果最自然，支持SSML控制语气 | 有免费额度 |
-| Fish Audio | 开源，可克隆任意声音 | 免费/付费 |
-| ChatTTS | 开源，专为对话优化 | 免费 |
-| GPT-SoVITS | 开源声音克隆，只需几秒样本 | 免费 |
-| 豆包/火山引擎TTS | 字节系，中文质量高 | 有免费额度 |
-| Eleven Labs | 英文最好，中文也可 | 付费 |
+| EP01 | 反常识 | 你为什么总在意别人的看法? |
+| EP02 | 核心观点 | 所有的烦恼都来自人际关系 |
+| EP03 | 方法论 | 课题分离: 学会分清什么是你的事 |
+| EP04 | 金句 | 这本书里最扎心的5句话 |
+| EP05 | 一句话总结 | 60秒说清这本书讲了什么 |
 
-**推荐**：新手直接用剪映内置TTS。进阶用 Fish Audio 或 GPT-SoVITS 克隆独特声音做差异化。
-
-### 3. 背景视频/画面生成
-
-| 形式 | 工具 | 说明 |
-|------|------|------|
-| 文字动画 | 剪映、CapCut | 文字逐字出现+翻页效果 |
-| 图片轮播 | 剪映、Canva | 书的封面+金句图片 |
-| AI生成图片 | Midjourney、Stable Diffusion、通义万相、可灵 | 生成与书内容相关的意境图 |
-| AI生成视频 | 可灵AI、Runway、Pika、即梦 | 根据文案生成视频片段 |
-| 录屏翻书 | 微信读书/Kindle截屏 | 最简单的方式 |
-| 虚拟人/数字人 | HeyGen、D-ID、腾讯智影、硅基流动 | 生成虚拟主播讲书 |
-
-**本项目内置方案（generate_images.py，无需外部API）：**
-- 根据书籍分类自动选择主题配色（5套配色方案）
-- 自动生成渐变背景 + 装饰光点效果
-- 自动生成书籍封面卡片（书名+作者+装饰线条）
-- 自动将文案拆分为多段，每段生成独立的金句卡片
-- 自动生成片头（书名+钩子文案）和片尾（点赞关注CTA）
-- 画面之间有淡入淡出转场效果
-
-**进阶方案**：
-- 通义万相/可灵生成AI图片 + 文字动画
-- 数字人出镜（硅基流动/腾讯智影）
-
-### 4. 字幕自动生成
-
-| 工具 | 说明 |
-|------|------|
-| 剪映（自动识别字幕） | 一键生成，免费，准确率高 |
-| CapCut | 剪映海外版 |
-| Whisper (OpenAI) | 开源语音转文字，可本地部署 |
-
-### 5. 背景音乐
-
-| 工具 | 说明 |
-|------|------|
-| 剪映音乐库 | 内置海量免版权音乐，按氛围筛选 |
-| Suno AI | AI作曲，输入描述自动生成音乐 |
-| Udio | AI音乐生成 |
-| 网易AI作曲 / 天工音乐 | 国内平台 |
-| Pixabay Music | 免版权音乐库 |
-
-> 抖音对版权有检测，建议用剪映内置音乐或 AI 生成的原创音乐。
-
-### 6. 视频合成/剪辑
-
-| 工具 | 说明 |
-|------|------|
-| 剪映（桌面版） | 最推荐，一站式完成所有操作 |
-| FFmpeg | 命令行工具，可编程批量合成 |
-| MoviePy (Python) | Python视频处理库，适合自动化 |
-| Remotion | 用代码(React)生成视频 |
-
-### 7. BGM 智能匹配（bgm_matcher.py）
-
-本项目内置了 BGM 智能匹配模块，支持三种模式：
-
-| 模式 | 说明 | 是否需要 API |
-|------|------|-------------|
-| rule（规则匹配） | 根据书籍分类自动映射到对应情绪的 BGM | 不需要 |
-| ai（AI分析） | 让 AI 分析文案情绪，再匹配对应 BGM | 需要 |
-| suno（AI生成） | 生成 Suno AI Prompt，为每本书定制原创 BGM | 手动操作 |
-| auto（自动） | 有 API Key 时用 AI 分析，否则降级为规则匹配 | 自适应 |
-
-**情绪分类与 BGM 目录：**
+### 输出目录结构
 
 ```
-assets/bgm/
-├── calm/          ← 平静舒缓（心理学、哲学类书）
-├── inspiring/     ← 励志振奋（成长、效率、商业类书）
-├── emotional/     ← 感性温暖（情感、文学、人生感悟类书）
-├── thoughtful/    ← 沉思深邃（思维、哲学、科学类书）
-└── energetic/     ← 活力动感（书单推荐、快节奏盘点类）
-```
-
-只需将 BGM 文件放进对应情绪子目录，合成视频时会自动匹配。也支持直接把 BGM 放在 `assets/bgm/` 根目录，文件名包含情绪关键词（如 `calm_piano_01.mp3`）即可。
-
-**快捷命令：**
-```bash
-python bgm_matcher.py setup          # 创建情绪子目录
-python bgm_matcher.py guide          # 查看分类指南
-python bgm_matcher.py match --book "被讨厌的勇气"   # 测试匹配
-python bgm_matcher.py suno --book "认知觉醒"        # 生成 Suno Prompt
-```
-
-### 8. 封面/缩略图
-
-| 工具 | 说明 |
-|------|------|
-| Canva | 海量模板，拖拽设计 |
-| 创客贴 | 国内版Canva |
-| 剪映 | 可直接做封面 |
-| AI生成 | 用Midjourney/通义万相生成 |
-
----
-
-## 四、自动发布方案
-
-### 方案 A：半自动（推荐新手）
-
-- **抖音创作者服务平台** (creator.douyin.com)：PC端上传视频，支持定时发布，可提前一周批量上传排期
-
-### 方案 B：自动化发布工具
-
-| 工具 | 说明 | 类型 |
-|------|------|------|
-| social-auto-upload | GitHub开源，支持抖音/视频号/B站等多平台自动上传 | 开源免费 |
-| MediaCrawler | 爬虫+发布，支持多平台 | 开源 |
-| 蚁小二 | 多平台一键分发 | 付费 |
-| 融媒宝 | 多平台一键分发 | 付费 |
-| Playwright/Selenium | 自己写脚本控制浏览器自动上传 | 需开发 |
-
-`social-auto-upload` 是目前最靠谱的开源方案，用 Playwright 模拟浏览器操作，支持抖音、快手、视频号、B站、小红书等，支持定时发布和批量上传。
-
-### 方案 C：完全自动化流水线（进阶）
-
-用 Python 串起整个流程：
-
-```
-Cron定时触发
-  → 脚本从书单数据库取下一本书
-  → 调用 Claude/GPT API 生成文案
-  → 调用 TTS API 生成语音
-  → 调用 AI 生图 API 生成背景图
-  → FFmpeg/MoviePy 合成视频
-  → 调用 social-auto-upload 自动发布
+output/
+├── 被讨厌的勇气/
+│   ├── topic_plan.json               # 选题规划
+│   ├── ep01_你为什么总在意别人的看法/
+│   │   ├── script.txt                # 文案
+│   │   ├── voice.mp3                 # 语音
+│   │   ├── voice.srt                 # 字幕
+│   │   ├── frames/                   # 画面帧
+│   │   └── video.mp4                 # 最终视频
+│   ├── ep02_所有的烦恼都来自人际关系/
+│   │   └── ...
+│   └── report.json                   # 生成报告
+├── 认知觉醒/
+│   └── ...
 ```
 
 ---
 
-## 五、执行节奏
+## 二、快速开始
 
-### 第一周：准备阶段
-- [ ] 注册抖音号，完善资料
-- [ ] 确定细分方向（建议金句/书单）
-- [ ] 用 Canva 设计头像、封面模板
-- [ ] 安装剪映桌面版
-- [ ] 注册 Claude/ChatGPT 用于生成文案
-
-### 第二周：手动跑通流程
-- [ ] 手动做3-5条视频，跑通全流程
-- [ ] 每条视频记录耗时，找出瓶颈
-- [ ] 测试不同风格（纯文字/图片/数字人）看数据
-
-### 第三-四周：半自动化
-- [ ] 用 AI 批量生成一周的文案
-- [ ] 用剪映模板批量套用
-- [ ] 用创作者平台定时发布
-
-### 第二个月起：全面自动化
-- [ ] 搭建 Python 自动化脚本
-- [ ] 部署 social-auto-upload
-- [ ] 建立书单数据库，持续补充内容
-
----
-
-## 六、发布策略
-
-- **频率**：每天 1-2 条（坚持比数量重要）
-- **时间**：早7-9点、中午12-13点、晚20-22点
-- **标签**：#读书 #好书推荐 #书单 + 书名相关标签
-- **前5条视频**：不要急着追数据，先找到节奏
-- **互动**：前期每条评论都回复
-
----
-
-## 七、变现路径
-
-1. **抖音橱窗带货**（卖书）— 1000粉即可开通
-2. **知识付费**（付费读书社群/课程）
-3. **直播带货**（讲书+卖书）
-4. **广告接单**（出版社/知识类APP投放）
-5. **引流私域**（微信读书社群）
-
----
-
-## 八、项目结构
-
-```
-douyindemo/
-├── README.md              # 本文档
-├── config.py              # 全局配置（API密钥、路径等）
-├── book_list.json         # 书单数据库
-├── generate_script.py     # AI文案生成
-├── generate_voice.py      # TTS语音合成
-├── generate_images.py     # 画面帧生成（Pillow，无需外部API）
-├── generate_video.py      # 视频合成（画面帧+语音+字幕+音乐）
-├── bgm_matcher.py         # BGM智能匹配（规则/AI情绪分析/Suno）
-├── download_bgm.py        # BGM自动搜索下载（Freesound等）
-├── auto_publish.py        # 自动发布到抖音（支持抖音平台音乐）
-├── main.py                # 主流程：串联所有步骤
-├── output/                # 输出目录
-│   ├── scripts/           # 生成的文案
-│   ├── voices/            # 生成的语音
-│   └── videos/            # 合成的视频
-├── assets/                # 静态资源
-│   ├── fonts/             # 字体文件
-│   ├── bgm/               # 背景音乐（按情绪分子目录）
-│   │   ├── calm/          # 平静舒缓
-│   │   ├── inspiring/     # 励志振奋
-│   │   ├── emotional/     # 感性温暖
-│   │   ├── thoughtful/    # 沉思深邃
-│   │   └── energetic/     # 活力动感
-│   └── templates/         # 视频模板/背景图
-└── requirements.txt       # Python依赖
-```
-
----
-
-## 九、环境准备与安装
-
-### 1. 前置要求
+### 1. 环境要求
 
 - Python 3.10+
-- FFmpeg（视频合成必需）
-- 一个 AI API Key（OpenAI / 通义千问 / DeepSeek / Claude 任选其一）
+- FFmpeg
+- 一个 LLM API Key(OpenAI / 通义千问 / DeepSeek / Kimi / Claude 任选)
 
-### 2. 安装 FFmpeg
-
-**Windows**（推荐用 winget 或 scoop）：
-```bash
-# winget
-winget install Gyan.FFmpeg
-
-# 或 scoop
-scoop install ffmpeg
-```
-
-安装后验证：
-```bash
-ffmpeg -version
-```
-
-### 3. 安装 Python 依赖
+### 2. 安装
 
 ```bash
+# 克隆项目
 cd douyindemo
+
+# 安装依赖
 pip install -r requirements.txt
-```
 
-### 4. 安装 Playwright 浏览器（自动发布需要）
-
-```bash
+# 安装浏览器引擎(自动发布需要，可选)
 playwright install chromium
 ```
 
-### 5. 配置 API Key
-
-有两种方式，任选其一：
-
-**方式 A：环境变量（推荐）**
+### 3. 安装 FFmpeg
 
 ```bash
+# Windows (winget)
+winget install Gyan.FFmpeg
+
+# Windows (scoop)
+scoop install ffmpeg
+
+# 验证
+ffmpeg -version
+```
+
+### 4. 配置 API Key
+
+```bash
+# 方式A: 环境变量(推荐)
 # OpenAI
 export OPENAI_API_KEY="sk-xxxxxxxx"
 
-# 如果用国内模型，额外设置 BASE_URL 和 MODEL
 # 通义千问
+export OPENAI_API_KEY="sk-xxxxxxxx"
 export OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 export OPENAI_MODEL="qwen-plus"
 
 # DeepSeek
+export OPENAI_API_KEY="sk-xxxxxxxx"
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 export OPENAI_MODEL="deepseek-chat"
 
 # Kimi
+export OPENAI_API_KEY="sk-xxxxxxxx"
 export OPENAI_BASE_URL="https://api.moonshot.cn/v1"
 export OPENAI_MODEL="moonshot-v1-8k"
 
-# 如果用 Claude
-export CLAUDE_API_KEY="sk-ant-xxxxxxxx"
+# 方式B: 直接编辑 config.py 中对应字段
 ```
 
-**方式 B：直接编辑 config.py**
-
-打开 `config.py`，找到对应的配置项修改即可。
-
-### 6. （可选）配置语音角色
-
-默认使用 `zh-CN-YunxiNeural`（男声），可在 `config.py` 中修改 `EDGE_TTS_VOICE`。
-
-查看所有可用中文语音：
-```bash
-python generate_voice.py --list-voices
-```
-
-常用语音：
-| 语音ID | 性别 | 风格 |
-|--------|------|------|
-| zh-CN-YunxiNeural | 男 | 年轻，适合讲书 |
-| zh-CN-YunjianNeural | 男 | 沉稳，适合深度解读 |
-| zh-CN-XiaoxiaoNeural | 女 | 温柔，适合情感类书籍 |
-| zh-CN-XiaoyiNeural | 女 | 活泼，适合书单推荐 |
-
-### 7. 背景音乐（三种方案，无需手动下载）
-
-在 `config.py` 中设置 `BGM_SOURCE` 选择方案：
-
-```python
-BGM_SOURCE = "download"   # 方案A: 自动下载免费音乐（默认）
-BGM_SOURCE = "douyin"     # 方案B: 发布时直接用抖音平台音乐（最省事）
-BGM_SOURCE = "local"      # 方案C: 使用本地 assets/bgm/ 中的音乐
-```
-
-**方案 A：自动下载（推荐）**
-
-从 Freesound 等免费音乐库按情绪自动搜索下载，零手动操作：
+### 5. 运行
 
 ```bash
-# 需要先配置 Freesound API Key（免费注册）
-export FREESOUND_API_KEY="your-key"
+# 全自动: 1本书 x 5集 = 5条视频
+python main.py auto
 
-# 一键下载所有情绪分类的 BGM
-python download_bgm.py download
+# 3本书 x 5集 = 15条视频
+python main.py auto --books 3
 
-# 只下载指定情绪
-python download_bgm.py download --mood calm --count 5
+# 2本书 x 8集 = 16条视频
+python main.py auto --books 2 --episodes 8
 ```
-
-注册 Freesound API Key（免费）: https://freesound.org/apiv2/apply/
-
-没有 API Key 也没关系，运行主流程时如果检测到本地无 BGM 会自动尝试下载。
-
-**方案 B：使用抖音平台音乐（最省事，零版权风险）**
-
-视频生成时不加 BGM，在发布环节自动从抖音音乐库搜索添加。好处：
-- 完全零版权风险（抖音已购买授权）
-- 可以蹭热门音乐的流量
-- 抖音会根据音乐推荐流量
-
-```bash
-# 发布时自动添加抖音音乐
-python auto_publish.py upload --video xxx.mp4 --title "xxx" --douyin-music
-
-# 指定音乐搜索关键词
-python auto_publish.py upload --video xxx.mp4 --title "xxx" --douyin-music --music-keyword "轻音乐"
-```
-
-**方案 C：本地音乐**
-
-手动放 MP3 到 `assets/bgm/` 即可。没有 API Key 时可以查看免费下载指南：
-```bash
-python download_bgm.py guide
-```
-
-### 8. （可选）添加自定义字体
-
-将 `.ttf` 或 `.otf` 字体文件放入 `assets/fonts/` 目录，会自动优先使用。
-
-不放的话默认使用系统字体（微软雅黑）。
 
 ---
 
-## 十、使用方式
+## 三、项目结构
 
-### 核心命令
+```
+douyindemo/
+├── config.py              # 全局配置(API密钥/视频参数/风控/声音克隆/数字人等)
+├── main.py                # 主入口: 全自动流水线
+│
+├── book_list.json         # 书单数据库(自动维护)
+├── book_crawler.py        # 书单采集(豆瓣+AI推荐)
+│
+├── generate_script.py     # 选题规划 + AI文案生成(一书多集)
+├── generate_voice.py      # TTS语音合成(Edge/Azure/离线/声音克隆)
+├── generate_images.py     # 画面帧生成(Pillow，5套主题配色)
+├── generate_video.py      # 视频合成(MoviePy，支持数字人画面)
+├── digital_human.py       # 数字人视频(SadTalker/HeyGen)
+│
+├── bgm_matcher.py         # BGM智能匹配(规则/AI情绪/Suno)
+├── download_bgm.py        # BGM自动下载(Freesound)
+│
+├── auto_publish.py        # 自动发布到抖音(Playwright)
+├── safety.py              # 风控模块(敏感词/限流/差异化)
+├── sensitive_words.txt    # 敏感词库(可自行扩充)
+│
+├── requirements.txt       # Python依赖
+├── output/                # 产出(按书籍/集数分目录)
+└── assets/
+    ├── fonts/             # 自定义字体
+    ├── bgm/               # 背景音乐(按情绪分子目录)
+    ├── templates/         # 视频模板
+    ├── voice_sample/      # 你的声音样本(声音克隆用)
+    │   └── sample.wav     # 10-30秒清晰人声
+    └── avatar/            # 你的照片(数字人用)
+        └── photo.png      # 正面半身照
+```
+
+---
+
+## 四、核心命令
+
+### 全自动模式
 
 ```bash
-# 处理书单中下一本书（自动执行：文案→语音→视频）
-python main.py next
+python main.py auto                          # 1本书 x 5集
+python main.py auto --books 3                # 3本书 x 5集 = 15条视频
+python main.py auto --books 2 --episodes 8   # 2本书 x 8集 = 16条视频
+python main.py auto --books 1 --publish      # 生成并自动发布
+```
 
-# 批量处理 3 本
-python main.py batch --count 3
+### 指定一本书
 
-# 处理书单中所有待处理的书
-python main.py batch --all
+```bash
+python main.py book "被讨厌的勇气"               # 默认5集
+python main.py book "被讨厌的勇气" --episodes 10  # 10集
+```
 
-# 指定视频时长为 90 秒（默认 60 秒）
-python main.py next --duration 90
+### 只看选题规划(不生成视频)
 
-# 生成后自动发布到抖音
-python main.py next --publish
+```bash
+python main.py plan "认知觉醒"
+```
 
-# 批量生成并发布
-python main.py batch --all --publish
+### 书单管理
 
-# 重置所有书籍状态为 pending（重新开始）
-python main.py reset
+```bash
+python main.py fill                      # 自动补充10本
+python main.py fill --count 20           # 补充20本
+python main.py fill --category "心理学"   # 只补指定分类
+python main.py fill --source ai          # 只用AI推荐
+python main.py stats                     # 查看统计
+python main.py reset                     # 重置书单状态
 ```
 
 ### 单独使用各模块
 
-**单独生成文案：**
 ```bash
-# 自动取书单中下一本
-python generate_script.py
+# 文案
+python generate_script.py --book "被讨厌的勇气" --episodes 5
 
-# 指定书名
-python generate_script.py --book "被讨厌的勇气"
-
-# 批量生成所有文案
-python generate_script.py --all
-
-# 指定时长（影响字数）
-python generate_script.py --duration 90
-```
-
-**单独生成语音：**
-```bash
-# 从文案文件生成语音
-python generate_voice.py --file output/scripts/被讨厌的勇气_20260331.txt
-
-# 直接输入文本
-python generate_voice.py --text "你有没有想过，为什么你总是在意别人的看法？"
-
-# 不生成字幕
-python generate_voice.py --file xxx.txt --no-subtitle
-
-# 查看所有可用语音
+# 语音
+python generate_voice.py --file output/xxx/ep01/script.txt
+python generate_voice.py --text "测试一段文字"
 python generate_voice.py --list-voices
-```
 
-**单独合成视频：**
-```bash
-python generate_video.py \
-  --voice output/voices/被讨厌的勇气_20260331.mp3 \
-  --subtitle output/voices/被讨厌的勇气_20260331.srt \
-  --title "被讨厌的勇气" \
-  --author "岸见一郎" \
-  --bgm assets/bgm/light_piano.mp3 \
-  --bgm-volume 0.2
-```
+# 视频
+python generate_video.py --voice xxx.mp3 --subtitle xxx.srt --title "书名"
 
-**单独发布到抖音：**
-```bash
-# 首次使用：登录抖音（扫码，只需一次）
-python auto_publish.py login
+# BGM
+python bgm_matcher.py guide                          # 查看分类指南
+python bgm_matcher.py match --book "被讨厌的勇气"     # 测试匹配
+python download_bgm.py download                       # 下载所有分类BGM
+python download_bgm.py guide                          # 免费音乐下载指南
 
-# 上传视频
-python auto_publish.py upload \
-  --video output/videos/被讨厌的勇气_20260331.mp4 \
-  --title "看完这本书，我才明白为什么你总是活得那么累" \
-  --tags 读书 好书推荐 心理学
-
-# 定时发布
-python auto_publish.py upload \
-  --video output/videos/xxx.mp4 \
-  --title "xxx" \
-  --time "2026-04-01 20:30"
-```
-
-### 管理书单
-
-编辑 `book_list.json` 即可添加新书，格式：
-
-```json
-{
-  "id": 11,
-  "title": "书名",
-  "author": "作者",
-  "category": "分类",
-  "description": "一句话简介（AI会基于此生成文案）",
-  "tags": ["标签1", "标签2"],
-  "status": "pending"
-}
-```
-
-status 字段说明：
-- `pending` — 待处理
-- `script_done` — 文案已生成
-- `done` — 全流程完成
-- `error` — 处理出错
-
----
-
-## 十一、完整工作流示意
-
-```
-┌─────────────────────────────────────────────────────┐
-│                  python main.py next                │
-└──────────────────────┬──────────────────────────────┘
-                       │
-          ┌────────────▼────────────┐
-          │  1. 从 book_list.json   │
-          │     取下一本 pending 书  │
-          └────────────┬────────────┘
-                       │
-          ┌────────────▼────────────┐
-          │  2. generate_script.py  │
-          │  调用 AI API 生成文案    │
-          │  → output/scripts/*.txt │
-          └────────────┬────────────┘
-                       │
-          ┌────────────▼────────────┐
-          │  3. generate_voice.py   │
-          │  Edge TTS 生成语音+字幕  │
-          │  → output/voices/*.mp3  │
-          │  → output/voices/*.srt  │
-          └────────────┬────────────┘
-                       │
-          ┌────────────▼────────────┐
-          │  4. bgm_matcher.py      │
-          │  智能匹配背景音乐        │
-          │  (规则/AI情绪/Suno生成)  │
-          └────────────┬────────────┘
-                       │
-          ┌────────────▼────────────┐
-          │  5. generate_video.py   │
-          │  MoviePy 合成视频        │
-          │  语音+字幕+书名+BGM     │
-          │  → output/videos/*.mp4  │
-          └────────────┬────────────┘
-                       │
-          ┌────────────▼────────────┐
-          │  6. auto_publish.py     │
-          │  (可选) Playwright      │
-          │  自动发布到抖音          │
-          └─────────────────────────┘
+# 发布
+python auto_publish.py login                          # 首次登录(扫码)
+python auto_publish.py upload --video xxx.mp4 --title "xxx" --tags 读书 好书推荐
+python auto_publish.py upload --video xxx.mp4 --title "xxx" --douyin-music
 ```
 
 ---
 
-## 十二、常见问题
+## 五、各模块详细说明
 
-### Q: 没有 API Key 怎么办？
-可以先手动写文案，只用语音合成+视频合成模块。Edge TTS 完全免费，不需要任何 Key。
+### 5.1 书单采集 (book_crawler.py)
 
-### Q: 视频没有背景音乐？
-在 `assets/bgm/` 目录放入 MP3 文件即可。没有的话视频只有语音，也能用。
+| 来源 | 说明 | 需要API |
+|------|------|---------|
+| 豆瓣热门 | 按分类爬取豆瓣读书热门榜，提取书名/作者/简介/评分 | 不需要 |
+| AI推荐 | LLM 按分类推荐适合做短视频的书，自动生成结构化数据 | 需要 |
+| 自动补充 | 书单 pending 数量低于阈值(默认5)时自动触发采集 | - |
 
-### Q: 字幕位置/大小不对？
-编辑 `config.py` 中的 `SUBTITLE_FONT_SIZE`、`TITLE_FONT_SIZE` 等参数调整。
+支持的分类: 心理学、自我成长、商业、沟通、历史、哲学、科学、文学(可在 config.py 中修改)。
 
-### Q: 如何更换 AI 模型？
-编辑 `config.py`，修改 `LLM_PROVIDER`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。支持所有 OpenAI 兼容接口的模型。
+### 5.2 文案生成 (generate_script.py)
 
-### Q: 抖音发布失败？
-1. 先确认 Cookie 没过期：重新运行 `python auto_publish.py login`
-2. 查看 `output/videos/` 下的错误截图排查问题
-3. 抖音页面改版可能导致选择器失效，需要更新 `auto_publish.py` 中的选择器
+**一书多集流程:**
 
-### Q: 如何提升视频质量？
-1. 在 `assets/templates/` 放入背景图片（后续版本支持）
-2. 用 AI 生成配图（Midjourney / 通义万相）替换纯色背景
-3. 使用更好的字体（推荐：思源黑体、阿里巴巴普惠体）
-4. 在 `config.py` 中调整 `VIDEO_FPS` 和编码参数
+1. AI 分析书籍，规划 N 个选题(不同角度: 核心观点/金句/方法论/故事/反常识/对比...)
+2. 选题保存为 `topic_plan.json`，支持断点续跑
+3. 逐集生成文案，每集紧扣选题展开，不会内容重复
+
+**支持的 LLM:**
+
+| 模型 | 配置方式 |
+|------|---------|
+| OpenAI GPT-4o/GPT-4 | `OPENAI_BASE_URL` 默认值 |
+| 通义千问 | `OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| DeepSeek | `OPENAI_BASE_URL=https://api.deepseek.com/v1` |
+| Kimi | `OPENAI_BASE_URL=https://api.moonshot.cn/v1` |
+| Claude | `LLM_PROVIDER="claude"` + `CLAUDE_API_KEY` |
+
+所有兼容 OpenAI 接口的模型都可以直接接入。
+
+### 5.3 语音合成 (generate_voice.py)
+
+**四重保障(自动降级):**
+
+```
+声音克隆(可选) --未启用或失败--> Edge TTS(免费) --失败--> 重试3次 --仍失败--> 离线pyttsx3
+```
+
+**Edge TTS 自然度优化:**
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `EDGE_TTS_VOICE` | 语音角色 | `zh-CN-YunxiNeural`(男) |
+| `EDGE_TTS_STYLE` | 说话风格 | `narration-relaxed`(轻松叙述) |
+| `EDGE_TTS_RATE` | 语速微调 | `+0%` |
+| `EDGE_TTS_SMART_PAUSE` | 智能停顿 | `True` |
+
+**推荐搭配:**
+
+| 内容类型 | 语音 | 风格 |
+|---------|------|------|
+| 拆书解读 | YunxiNeural | narration-relaxed |
+| 深度思考 | YunjianNeural | documentary-narration |
+| 情感文学 | XiaoxiaoNeural | gentle |
+| 书单推荐 | XiaoyiNeural | cheerful |
+
+**国内网络连不上微软服务器时:**
+
+```bash
+# 方案A: 配置代理
+export HTTPS_PROXY=http://127.0.0.1:7890
+
+# 方案B: 直接用离线TTS
+# config.py 中设置 TTS_PROVIDER = "offline"
+```
+
+### 5.4 声音克隆 (generate_voice.py 内置)
+
+录一段 10-30 秒人声样本，后续所有视频都用你自己的声音，辨识度拉满。
+
+**两种方案:**
+
+| 方案 | 效果 | 成本 | 需要GPU | 说明 |
+|------|------|------|---------|------|
+| GPT-SoVITS | 几乎以假乱真 | 免费 | 是(4GB+) | 开源，本地部署，几秒样本即可克隆 |
+| Fish Audio | 好 | 有免费额度 | 否 | 在线API，上传样本即用，最简单 |
+
+**使用步骤:**
+
+```bash
+# 1. 录音: 10-30秒清晰人声，无背景噪音，WAV格式
+#    放到 assets/voice_sample/sample.wav
+
+# 2. 选择方案，编辑 config.py:
+TTS_PROVIDER = "clone"
+
+# 方案A: GPT-SoVITS(本地部署)
+VOICE_CLONE_ENGINE = "gpt_sovits"
+GPT_SOVITS_REF_AUDIO = "assets/voice_sample/sample.wav"
+GPT_SOVITS_REF_TEXT = "这里填你录音说的那段话的文字内容"
+# 需要先部署: https://github.com/RVC-Boss/GPT-SoVITS
+
+# 方案B: Fish Audio(在线API，最简单)
+VOICE_CLONE_ENGINE = "fish_audio"
+FISH_AUDIO_API_KEY = "your-key"        # https://fish.audio 注册获取
+FISH_AUDIO_MODEL_ID = "your-model-id"  # 上传样本后获取
+```
+
+**录音要求:**
+- 安静环境，无背景噪音、回声
+- 说话自然，语速适中(不要刻意播音腔)
+- WAV 格式，16kHz 以上，单声道
+- 时长 10-30 秒(内容随意，可以读一段书)
+
+**GPT-SoVITS 部署:**
+```bash
+git clone https://github.com/RVC-Boss/GPT-SoVITS
+cd GPT-SoVITS
+pip install -r requirements.txt
+# 下载预训练模型(见项目README)
+python api.py  # 启动API服务(默认端口9880)
+```
+
+> 声音克隆失败时会自动降级到 Edge TTS，不影响整体流程。
+
+### 5.5 画面生成 (generate_images.py)
+
+基于 Pillow 自动生成，无需外部 API:
+
+- 5 套主题配色(根据书籍分类自动选择)
+- 渐变背景 + 装饰光点
+- 书籍封面卡片(书名+作者+装饰)
+- 金句/观点卡片(文案自动拆段，每段一张卡片)
+- 片头(书名+钩子) + 片尾(关注CTA)
+- 画面之间淡入淡出转场
+
+**5 套配色:**
+
+| 配色 | 适用分类 | 风格 |
+|------|---------|------|
+| 静谧蓝 | 心理学、哲学 | 深蓝渐变+金色高亮 |
+| 活力橙 | 成长、商业 | 深棕渐变+橙色强调 |
+| 温暖粉 | 情感、文学 | 紫红渐变+粉色 |
+| 深邃绿 | 投资、科学 | 深绿渐变+青绿 |
+| 电光紫 | 书单、盘点 | 深紫渐变+亮紫 |
+
+> **注意:** Pillow 生成的画面质感有限，与剪映/CapCut 等专业工具有差距。如果追求更高质量，建议用本项目生成文案+语音后，手动导入剪映制作视频(见第八章建议)。启用数字人(5.6)后画面质感会有质的提升。
+
+### 5.6 数字人 (digital_human.py)
+
+上传一张正面照片，自动生成"真人"口播视频，画面中有一个"人"在说话。启用后自动替代卡片画面，视频质感显著提升。
+
+**方案对比:**
+
+| 方案 | 效果 | 成本 | GPU | 部署难度 |
+|------|------|------|-----|---------|
+| SadTalker | 好(嘴型+头部微动) | 免费 | 需要4GB+ | 中 |
+| MuseTalk | 较好(实时唇形同步) | 免费 | 需要6GB+ | 中 |
+| HeyGen | 最好(最逼真) | 付费 | 不需要 | 无需部署 |
+| 腾讯智影 | 好 | 有免费额度 | 不需要 | 无需部署 |
+| 硅基流动 | 好 | 有免费额度 | 不需要 | 无需部署 |
+
+**使用步骤:**
+
+```bash
+# 1. 准备照片: 正面半身照，表情自然，光线均匀
+#    放到 assets/avatar/photo.png
+
+# 2. 检查照片是否符合要求
+python digital_human.py check
+
+# 3. 编辑 config.py:
+DIGITAL_HUMAN_ENGINE = "sadtalker"
+SADTALKER_PATH = "/path/to/SadTalker"
+
+# 4. 查看完整部署指引
+python digital_human.py guide
+
+# 5. 运行(自动用数字人画面替代卡片)
+python main.py auto
+```
+
+**照片要求:**
+- 正面或微侧(15度以内)
+- 半身照或头肩照，人脸占画面 30%+ 
+- 光线均匀，无强烈阴影
+- 背景简洁(纯色或虚化最佳)
+- 嘴巴自然闭合
+- 分辨率 512x512 以上
+
+**SadTalker 部署:**
+```bash
+git clone https://github.com/OpenTalker/SadTalker
+cd SadTalker
+pip install -r requirements.txt
+# 下载预训练模型(见项目README)
+```
+
+> 没有 GPU 或不想部署? 推荐直接用**腾讯智影**或**硅基流动**的在线免费额度，手动生成数字人视频后放到对应 ep 目录即可。
+
+### 5.7 BGM (bgm_matcher.py + download_bgm.py)
+
+三种方案:
+
+| 方案 | 配置 | 说明 |
+|------|------|------|
+| 自动下载 | `BGM_SOURCE="download"` | 从 Freesound 按情绪下载(需API Key) |
+| 抖音音乐 | `BGM_SOURCE="douyin"` | 发布时自动添加抖音平台音乐(零版权风险) |
+| 本地文件 | `BGM_SOURCE="local"` | 手动放 MP3 到 `assets/bgm/` |
+
+BGM 按情绪分 5 个子目录(calm/inspiring/emotional/thoughtful/energetic)，根据书籍分类自动匹配。
+
+### 5.8 自动发布 (auto_publish.py)
+
+基于 Playwright 控制浏览器，模拟人工操作:
+
+1. 首次需扫码登录: `python auto_publish.py login`
+2. Cookie 自动保存，后续无需重复登录
+3. 支持: 定时发布、抖音平台音乐、批量上传
+4. 内置风控(见第七章)
+
+> **注意:** 抖音网页版经常改版，选择器可能失效，需要根据实际页面调试 `auto_publish.py` 中的 CSS 选择器。建议首次使用时设置 `headless=False` 观察运行情况。
+
+---
+
+## 六、配置参考
+
+所有配置集中在 `config.py`，主要分组:
+
+| 分组 | 关键配置 | 说明 |
+|------|---------|------|
+| AI文案 | `LLM_PROVIDER` `OPENAI_API_KEY` `OPENAI_BASE_URL` | LLM选择和密钥 |
+| 语音 | `TTS_PROVIDER` `EDGE_TTS_VOICE` `EDGE_TTS_STYLE` | TTS引擎和风格 |
+| 视频 | `VIDEO_WIDTH` `VIDEO_HEIGHT` `VIDEO_FPS` | 视频尺寸帧率 |
+| 字幕 | `SUBTITLE_FONT_SIZE` `SUBTITLE_FONT_COLOR` | 字幕样式 |
+| BGM | `BGM_SOURCE` | 背景音乐来源 |
+| 发布 | `PUBLISH_TIMES` `DAILY_PUBLISH_LIMIT` | 发布时间和限额 |
+| 风控 | `PUBLISH_INTERVAL_*` `SENSITIVE_WORDS_ENABLED` | 安全策略 |
+| 书单 | `EPISODES_PER_BOOK` `BOOK_LIST_MIN_PENDING` | 一书多集和书单采集 |
+
+---
+
+## 七、风控与安全策略
+
+### 7.1 敏感词检测
+
+发布前自动扫描标题和文案，命中敏感词则拦截发布。
+
+- 词库文件: `sensitive_words.txt`(每行一个词，支持自行扩充)
+- 覆盖: 政治/违法/虚假宣传/侵权/引流/低俗等
+- 配置: `SENSITIVE_WORDS_ENABLED = True`
+
+### 7.2 发布限流
+
+| 策略 | 配置 | 默认值 |
+|------|------|--------|
+| 每日上限 | `DAILY_PUBLISH_LIMIT` | 5条/天 |
+| 发布间隔 | `PUBLISH_INTERVAL_MIN/MAX` | 60-180秒随机 |
+| 操作延迟 | `ACTION_DELAY_MIN/MAX` | 1-3秒随机(每步操作) |
+| 打字速度 | 代码内随机 | 30-80ms/字 |
+| 批量休息 | `PUBLISH_BATCH_SIZE` / `PUBLISH_REST_*` | 每3条休息5-10分钟 |
+
+### 7.3 跨平台差异化
+
+多平台分发时自动对标题做微调(同义替换、平台特定标签)，避免被判重复内容。
+
+配置: `CROSS_PLATFORM_VARIATION = True`
+
+### 7.4 发布日志
+
+每次发布自动记录到 `publish_log.json`，包含每日计数和发布历史。
+
+查看统计: `python main.py stats`
+
+### 7.5 安全使用建议
+
+- 单日发布不超过 5 条(新号建议 1-2 条)
+- 不要在固定时间发布，利用项目的随机间隔功能
+- 定期更新 `sensitive_words.txt`，关注抖音创作者服务中心的规则变化
+- 多账号运营需要 IP 隔离(本项目未内置，建议配合易媒助手等工具)
+
+---
+
+## 八、已知局限与建议
+
+### 当前局限
+
+| 环节 | 局限 | 影响 |
+|------|------|------|
+| 画面质量 | Pillow 生成的卡片质感有限，与剪映差距大 | 视频在抖音上竞争力偏低 |
+| TTS音质 | Edge TTS 听3秒能辨别是AI，与真人配音有差距 | 影响完播率 |
+| 自动发布 | 选择器基于推测，抖音改版后需手动调试 | 首次使用大概率需要适配 |
+| 豆瓣爬取 | 可能被反爬拦截 | 降级到AI推荐即可 |
+| 文案质量 | 依赖AI模型水平，没有质量评估机制 | 个别文案可能平庸 |
+| 数据反馈 | 没有抓取发布后的播放/点赞数据 | 无法自动优化内容方向 |
+
+### 推荐使用方式
+
+**阶段一: 半自动(推荐新手先这样做)**
+
+1. 用本项目生成文案(这是最省时间的部分)
+2. 把文案复制到**剪映**，用剪映的 TTS + 模板制作视频(质量远超本项目的画面方案)
+3. 通过抖音创作者平台手动发布，观察数据
+4. 跑通 5-10 条后，确认哪些选题/风格数据好
+
+**阶段二: 提升自动化**
+
+- 文案+语音全自动(本项目已支持)
+- 视频画面接入更好的方案:
+  - 数字人 API(硅基流动/腾讯智影，有免费额度)
+  - AI 生成配图(通义万相/可灵)替代纯色卡片
+- 自动发布调通后开启
+
+**阶段三: 全自动+数据驱动**
+
+- 全流程自动化
+- 加入数据回收(爬取播放量/点赞)
+- 根据数据自动调整选题方向和风格
+
+### 视频质量提升路径
+
+| 优先级 | 方案 | 配置方式 | 效果提升 |
+|--------|------|---------|---------|
+| 1 | 启用声音克隆 | `TTS_PROVIDER="clone"` + 录 30 秒人声 | 大 — 声音有辨识度，不再是千篇一律的AI腔 |
+| 2 | 启用数字人 | `DIGITAL_HUMAN_ENGINE="sadtalker"` + 一张照片 | 很大 — 有"人"在画面里，完播率显著提升 |
+| 3 | 手动用剪映制作 | 本项目生成文案+语音，导入剪映做画面 | 很大 — 最推荐的起步方式 |
+| 4 | AI 生成配图 | 通义万相/可灵 替代纯色背景 | 中 |
+| 5 | 用更好的 LLM | GPT-4o / Claude | 中 — 文案质量明显优于免费模型 |
+
+---
+
+## 九、账号运营指南
+
+### 9.1 账号定位
+
+| 方向 | 特点 | 自动化适配度 |
+|------|------|-------------|
+| 金句/名言 | 门槛低，适合批量 | 最高 |
+| 书单推荐 | 起号快，同质化严重 | 高 |
+| 拆书解读 | 有深度，粘性强 | 高(一书多集很适合) |
+| 故事型 | 完播率高，文案要求高 | 中 |
+| 真人出镜 | 粉丝粘性最强 | 低(需要人) |
+
+### 9.2 发布策略
+
+- **频率:** 每天 1-2 条(坚持比数量重要)
+- **时间:** 早 7-9 点、中午 12-13 点、晚 20-22 点
+- **标签:** `#读书` `#好书推荐` `#书单` + 书名相关标签
+- **前5条:** 不追数据，找节奏
+- **互动:** 前期每条评论都回复
+
+### 9.3 变现路径
+
+1. **抖音橱窗带货**(卖书) - 1000粉即可开通，最直接
+2. **知识付费**(读书社群/课程)
+3. **直播带货**(讲书+卖书)
+4. **广告接单**(出版社/知识类APP)
+5. **引流私域**(微信读书社群)
+
+### 9.4 执行节奏
+
+| 阶段 | 时间 | 目标 |
+|------|------|------|
+| 准备 | 第1周 | 注册账号、配置工具、设计封面模板 |
+| 手动验证 | 第2周 | 手动做5条视频，跑通流程，看数据 |
+| 半自动 | 第3-4周 | AI批量生成文案，剪映制作视频，定时发布 |
+| 全自动 | 第2月起 | 全流程自动化，持续优化 |
+
+---
+
+## 十、常见问题
+
+### Q: 没有 API Key 怎么办?
+可以跳过文案生成，手动写文案后只用语音+视频模块。Edge TTS 完全免费。
+
+### Q: Edge TTS 连不上?
+国内网络可能无法直连微软服务器。两种解决方案:
+```bash
+# 方案A: 配代理
+export HTTPS_PROXY=http://127.0.0.1:7890
+
+# 方案B: 用离线TTS(config.py)
+TTS_PROVIDER = "offline"
+```
+
+### Q: 视频质量不够好?
+这是已知局限(见第八章)。建议用本项目生成文案+语音，手动导入剪映制作视频。
+
+### Q: 抖音发布失败?
+1. Cookie 过期: 重新运行 `python auto_publish.py login`
+2. 页面改版: 需要更新 `auto_publish.py` 中的 CSS 选择器
+3. 查看错误截图排查
+
+### Q: 如何换AI模型?
+编辑 `config.py` 中的 `OPENAI_BASE_URL` 和 `OPENAI_MODEL`，支持所有兼容 OpenAI 接口的模型。
+
+### Q: 一本书生成几集合适?
+热门书 5-8 集，内容特别丰富的可以 10 集。在 `config.py` 中设置 `EPISODES_PER_BOOK`，或命令行 `--episodes N`。
+
+### Q: 如何增加新的书籍分类?
+编辑 `config.py` 中的 `BOOK_TARGET_CATEGORIES` 列表即可。
+
+### Q: 声音克隆需要什么条件?
+- **Fish Audio(最简单):** 只需注册账号、上传声音样本，拿到 API Key 和模型 ID 填入 config.py 即可，无需 GPU
+- **GPT-SoVITS(效果最好):** 需要 NVIDIA GPU(4GB+显存)，本地部署后启动 API 服务
+
+### Q: 没有 GPU 能用数字人吗?
+可以。腾讯智影和硅基流动都有在线免费额度，无需 GPU。在网页上操作: 上传照片 + 粘贴文案/上传音频 → 生成视频 → 下载放到对应 ep 目录即可。
+
+### Q: 声音克隆和数字人可以同时用吗?
+可以，这是效果最好的组合: 用你的声音 + 你的形象，生成的视频最接近真人出镜。在 config.py 中同时设置:
+```python
+TTS_PROVIDER = "clone"           # 声音克隆
+DIGITAL_HUMAN_ENGINE = "sadtalker"  # 数字人
+```
+
+### Q: 录音有什么要求?
+- 安静环境，无空调/风扇/电脑散热等背景噪音
+- 正常说话，不要刻意播音腔
+- 10-30 秒即可，内容随意(读一段书最自然)
+- WAV 格式，用手机录音转 WAV 也行
+
+---
+
+## 十一、外部工具参考
+
+本项目覆盖了核心生产流程，以下外部工具可配合使用:
+
+### 视频制作(提升画面质量)
+
+| 工具 | 用途 | 价格 |
+|------|------|------|
+| 剪映桌面版 | 视频剪辑+TTS+模板，质量最好 | 免费 |
+| 腾讯智影 | 数字人出镜 | 有免费额度 |
+| 硅基流动 | 数字人API | 有免费额度 |
+| 通义万相/可灵 | AI生成配图 | 有免费额度 |
+
+### 多平台分发
+
+| 工具 | 说明 | 价格 |
+|------|------|------|
+| 新榜小豆芽 | 50+平台一键分发，操作简单 | 免费版可用 |
+| 蚁小二 | 60+平台，多账号管理 | 付费 |
+| 易媒助手 | 防风控，IP隔离，多账号安全 | 付费 |
+
+### 声音克隆(提升TTS质量)
+
+| 工具 | 说明 |
+|------|------|
+| Fish Audio | 开源声音克隆，几秒样本即可 |
+| GPT-SoVITS | 开源，需本地部署 |
+| ChatTTS | 开源，专为对话优化 |
+
+---
+
+## 完整工作流
+
+```
+┌──────────────────────────────────────────────────────────┐
+│          python main.py auto --books 2 --episodes 5      │
+└───────────────────────────┬──────────────────────────────┘
+                            │
+               ┌────────────▼────────────┐
+               │  book_crawler.py        │
+               │  检查书单 -> 自动补充    │
+               └────────────┬────────────┘
+                            │
+               ┌────────────▼────────────┐
+               │  generate_script.py     │
+               │  AI 规划5个选题          │
+               │  逐集生成文案            │
+               └────────────┬────────────┘
+                            │
+                ┌───────────▼───────────┐
+                │  每集独立处理:         │
+                │                       │
+                │  generate_voice.py    │
+                │  语音(Edge TTS        │
+                │   或声音克隆)         │
+                │         |             │
+                │  digital_human.py     │
+                │  (可选) 数字人口播     │
+                │     或                │
+                │  generate_images.py   │
+                │  画面帧(5套配色)       │
+                │         |             │
+                │  bgm_matcher.py       │
+                │  智能匹配BGM          │
+                │         |             │
+                │  generate_video.py    │
+                │  合成最终视频          │
+                └───────────┬───────────┘
+                            │
+               ┌────────────▼────────────┐
+               │  safety.py              │
+               │  敏感词检测 + 限流检查   │
+               └────────────┬────────────┘
+                            │
+               ┌────────────▼────────────┐
+               │  auto_publish.py        │
+               │  (可选) 自动发布到抖音   │
+               │  随机间隔 + 定期休息     │
+               └────────────┬────────────┘
+                            │
+                    循环下一本书...
+```

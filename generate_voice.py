@@ -13,6 +13,7 @@ TTS 方案优先级：
 """
 
 import asyncio
+import json
 import os
 import re
 import time
@@ -22,6 +23,11 @@ from pathlib import Path
 from config import (
     TTS_PROVIDER,
     EDGE_TTS_VOICE,
+    EDGE_TTS_STYLE,
+    EDGE_TTS_STYLE_DEGREE,
+    EDGE_TTS_RATE,
+    EDGE_TTS_PITCH,
+    EDGE_TTS_SMART_PAUSE,
     EDGE_TTS_MAX_RETRIES,
     EDGE_TTS_RETRY_DELAY,
     HTTP_PROXY,
@@ -29,6 +35,13 @@ from config import (
     AZURE_TTS_KEY,
     AZURE_TTS_REGION,
     VOICES_DIR,
+    get_book_output_dir,
+    VOICE_CLONE_ENGINE,
+    GPT_SOVITS_API_URL,
+    GPT_SOVITS_REF_AUDIO,
+    GPT_SOVITS_REF_TEXT,
+    FISH_AUDIO_API_KEY,
+    FISH_AUDIO_MODEL_ID,
 )
 
 
@@ -47,11 +60,125 @@ def clean_text_for_tts(text: str) -> str:
 
 
 # ============================================================
-# Edge TTS（带重试和代理）
+# SSML 生成（让声音更自然）
+# ============================================================
+
+def _add_smart_pauses(text: str) -> str:
+    """
+    智能添加停顿标记，让语音有呼吸感
+
+    规则：
+    - 句号/问号/感叹号后：较长停顿（500ms）
+    - 逗号/顿号后：短停顿（250ms）
+    - 分号/冒号后：中等停顿（350ms）
+    - 省略号后：思考停顿（600ms）
+    - 破折号后：转折停顿（400ms）
+    """
+    if not EDGE_TTS_SMART_PAUSE:
+        return text
+
+    # 用 SSML break 标签替换标点后的空白
+    replacements = [
+        (r'([。！？!?])\s*', r'\1<break time="500ms"/>'),
+        (r'([，,、])\s*', r'\1<break time="250ms"/>'),
+        (r'([；;：:])\s*', r'\1<break time="350ms"/>'),
+        (r'(……|\.\.\.)\s*', r'\1<break time="600ms"/>'),
+        (r'([——\-\-])\s*', r'\1<break time="400ms"/>'),
+    ]
+
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text)
+
+    return text
+
+
+def _build_ssml(text: str, voice: str = None) -> str:
+    """
+    构建 SSML 文档，让 Edge TTS 输出更自然的语音
+
+    SSML 功能：
+    - mstts:express-as: 设置说话风格（聊天/叙述/愉快等）
+    - prosody: 控制语速、语调
+    - break: 自然停顿
+    """
+    voice = voice or EDGE_TTS_VOICE
+
+    # 添加智能停顿
+    text_with_pauses = _add_smart_pauses(text)
+
+    # 转义 XML 特殊字符（但保留已插入的 SSML 标签）
+    # 先保护 break 标签
+    text_with_pauses = text_with_pauses.replace("<break", "{{BREAK")
+    text_with_pauses = text_with_pauses.replace("/>", "ENDBREAK}}")
+    # 转义
+    text_with_pauses = text_with_pauses.replace("&", "&amp;")
+    text_with_pauses = text_with_pauses.replace('"', "&quot;")
+    # 恢复 break 标签
+    text_with_pauses = text_with_pauses.replace("{{BREAK", "<break")
+    text_with_pauses = text_with_pauses.replace("ENDBREAK}}", "/>")
+
+    # 构建 prosody 属性
+    prosody_attrs = []
+    if EDGE_TTS_RATE and EDGE_TTS_RATE != "+0%":
+        prosody_attrs.append(f'rate="{EDGE_TTS_RATE}"')
+    if EDGE_TTS_PITCH and EDGE_TTS_PITCH != "+0%":
+        prosody_attrs.append(f'pitch="{EDGE_TTS_PITCH}"')
+    prosody_str = " ".join(prosody_attrs)
+
+    # 构建内容部分
+    content = text_with_pauses
+
+    # 包裹 express-as（说话风格）
+    if EDGE_TTS_STYLE:
+        style_degree = f' styledegree="{EDGE_TTS_STYLE_DEGREE}"' if EDGE_TTS_STYLE_DEGREE else ""
+        content = (
+            f'<mstts:express-as style="{EDGE_TTS_STYLE}"{style_degree}>'
+            f'{content}'
+            f'</mstts:express-as>'
+        )
+
+    # 包裹 prosody（语速语调）
+    if prosody_str:
+        content = f'<prosody {prosody_str}>{content}</prosody>'
+
+    ssml = (
+        '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
+        'xmlns:mstts="https://www.w3.org/2001/mstts" '
+        f'xml:lang="zh-CN">'
+        f'<voice name="{voice}">'
+        f'{content}'
+        f'</voice>'
+        f'</speak>'
+    )
+
+    return ssml
+
+
+def _apply_pauses_as_spaces(text: str) -> str:
+    """
+    通过在标点后插入短句分隔来模拟停顿
+    Edge TTS 会在自然断句处自动加入停顿，
+    我们通过调整文本格式来强化这个效果
+    """
+    if not EDGE_TTS_SMART_PAUSE:
+        return text
+
+    # 在句末标点后加换行（Edge TTS 会在换行处自然停顿）
+    text = re.sub(r'([。！？!?])\s*', r'\1\n', text)
+    # 省略号后加停顿
+    text = re.sub(r'(……|\.\.\.)\s*', r'\1\n', text)
+    # 清理多余换行
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
+
+
+# ============================================================
+# Edge TTS（带 SSML + 重试 + 代理）
 # ============================================================
 
 def _setup_proxy():
-    """设置网络代理环境变量（Edge TTS 通过 aiohttp 使用环境变量代理）"""
+    """设置网络代理环境变量"""
     if HTTP_PROXY:
         os.environ["HTTP_PROXY"] = HTTP_PROXY
         os.environ["http_proxy"] = HTTP_PROXY
@@ -61,18 +188,24 @@ def _setup_proxy():
 
 
 async def generate_voice_edge(text: str, output_path: Path, voice: str = None):
-    """使用 Edge TTS 生成语音（带重试）"""
+    """使用 Edge TTS 生成自然语音（带重试）"""
     import edge_tts
 
     _setup_proxy()
     voice = voice or EDGE_TTS_VOICE
+    tts_text = _apply_pauses_as_spaces(text)
 
     last_error = None
     for attempt in range(1, EDGE_TTS_MAX_RETRIES + 1):
         try:
-            communicate = edge_tts.Communicate(text, voice)
+            communicate = edge_tts.Communicate(
+                tts_text,
+                voice,
+                rate=EDGE_TTS_RATE,
+                pitch=EDGE_TTS_PITCH,
+            )
             await communicate.save(str(output_path))
-            return  # 成功
+            return
         except Exception as e:
             last_error = e
             if attempt < EDGE_TTS_MAX_RETRIES:
@@ -86,16 +219,23 @@ async def generate_voice_edge(text: str, output_path: Path, voice: str = None):
 async def generate_voice_edge_with_subtitles(
     text: str, output_path: Path, subtitle_path: Path, voice: str = None
 ):
-    """使用 Edge TTS 生成语音 + SRT 字幕（带重试）"""
+    """使用 Edge TTS 生成自然语音 + SRT 字幕（带重试）"""
     import edge_tts
 
     _setup_proxy()
     voice = voice or EDGE_TTS_VOICE
 
+    tts_text = _apply_pauses_as_spaces(text)
+
     last_error = None
     for attempt in range(1, EDGE_TTS_MAX_RETRIES + 1):
         try:
-            communicate = edge_tts.Communicate(text, voice)
+            communicate = edge_tts.Communicate(
+                tts_text,
+                voice,
+                rate=EDGE_TTS_RATE,
+                pitch=EDGE_TTS_PITCH,
+            )
             srt_content = []
             audio_chunks = []
             idx = 1
@@ -167,6 +307,106 @@ def generate_voice_azure(text: str, output_path: Path):
     result = synthesizer.speak_text_async(text).get()
     if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
         raise RuntimeError(f"Azure TTS 失败: {result.reason}")
+
+
+# ============================================================
+# 声音克隆: GPT-SoVITS (本地部署)
+# ============================================================
+
+def generate_voice_gpt_sovits(text: str, output_path: Path):
+    """
+    使用 GPT-SoVITS 克隆声音生成语音
+
+    前提: 已在本地部署 GPT-SoVITS 并启动 API 服务
+    部署: https://github.com/RVC-Boss/GPT-SoVITS
+    启动: python api.py (默认端口 9880)
+
+    录音要求:
+    - 10-30秒清晰人声(无背景噪音)
+    - WAV格式, 16kHz+, 单声道
+    - 放到 assets/voice_sample/sample.wav
+    """
+    import urllib.request
+    import urllib.parse
+
+    ref_audio = Path(GPT_SOVITS_REF_AUDIO)
+    if not ref_audio.exists():
+        raise FileNotFoundError(
+            f"参考音频不存在: {ref_audio}\n"
+            f"请录制10-30秒人声样本放到 assets/voice_sample/sample.wav"
+        )
+
+    params = urllib.parse.urlencode({
+        "refer_wav_path": str(ref_audio),
+        "prompt_text": GPT_SOVITS_REF_TEXT,
+        "prompt_language": "zh",
+        "text": text,
+        "text_language": "zh",
+    })
+    url = f"{GPT_SOVITS_API_URL}?{params}"
+
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            audio_data = resp.read()
+
+        with open(output_path, "wb") as f:
+            f.write(audio_data)
+
+        print(f"  [GPT-SoVITS] 声音克隆完成")
+    except Exception as e:
+        raise RuntimeError(
+            f"GPT-SoVITS 调用失败: {e}\n"
+            f"请确认 GPT-SoVITS API 已启动: {GPT_SOVITS_API_URL}"
+        ) from e
+
+
+# ============================================================
+# 声音克隆: Fish Audio (在线API)
+# ============================================================
+
+def generate_voice_fish_audio(text: str, output_path: Path):
+    """
+    使用 Fish Audio 在线API克隆声音
+
+    步骤:
+    1. 注册 https://fish.audio
+    2. 上传你的声音样本，创建声音模型
+    3. 获取 API Key 和模型 ID，填入 config.py
+    """
+    import urllib.request
+
+    if not FISH_AUDIO_API_KEY:
+        raise ValueError("未配置 FISH_AUDIO_API_KEY，请在 config.py 或环境变量中设置")
+    if not FISH_AUDIO_MODEL_ID:
+        raise ValueError("未配置 FISH_AUDIO_MODEL_ID，请先在 Fish Audio 上传声音样本创建模型")
+
+    url = "https://api.fish.audio/v1/tts"
+    payload = json.dumps({
+        "text": text,
+        "reference_id": FISH_AUDIO_MODEL_ID,
+        "format": "mp3",
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {FISH_AUDIO_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            audio_data = resp.read()
+
+        with open(output_path, "wb") as f:
+            f.write(audio_data)
+
+        print(f"  [Fish Audio] 声音克隆完成")
+    except Exception as e:
+        raise RuntimeError(f"Fish Audio 调用失败: {e}") from e
 
 
 # ============================================================
@@ -259,6 +499,7 @@ def generate_voice(
     text: str,
     book_title: str = "untitled",
     with_subtitles: bool = True,
+    output_dir: Path = None,
 ) -> dict:
     """
     生成语音文件（统一入口）
@@ -271,11 +512,28 @@ def generate_voice(
         {"voice_path": Path, "subtitle_path": Path | None}
     """
     text = clean_text_for_tts(text)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_title = book_title.replace(" ", "_").replace("/", "_")
 
-    voice_path = VOICES_DIR / f"{safe_title}_{timestamp}.mp3"
-    subtitle_path = VOICES_DIR / f"{safe_title}_{timestamp}.srt" if with_subtitles else None
+    if output_dir is None:
+        output_dir = get_book_output_dir(book_title)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    voice_path = output_dir / "voice.mp3"
+    subtitle_path = output_dir / "voice.srt" if with_subtitles else None
+
+    # 声音克隆
+    if TTS_PROVIDER == "clone":
+        try:
+            if VOICE_CLONE_ENGINE == "fish_audio":
+                generate_voice_fish_audio(text, voice_path)
+            else:
+                generate_voice_gpt_sovits(text, voice_path)
+            # 声音克隆没有逐字时间戳，用估算字幕
+            if with_subtitles and subtitle_path:
+                generate_offline_subtitle(text, subtitle_path)
+            return {"voice_path": voice_path, "subtitle_path": subtitle_path}
+        except Exception as e:
+            print(f"  声音克隆失败: {e}")
+            print(f"  降级到 Edge TTS...")
 
     # Azure TTS
     if TTS_PROVIDER == "azure":
@@ -285,7 +543,7 @@ def generate_voice(
             generate_voice_azure(text, voice_path)
             return {"voice_path": voice_path, "subtitle_path": None}
 
-    # 离线 TTS（直接使用，不尝试网络）
+    # 离线 TTS
     if TTS_PROVIDER == "offline":
         generate_voice_offline(text, voice_path)
         if with_subtitles and subtitle_path:

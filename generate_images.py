@@ -1,13 +1,13 @@
 """
 画面生成模块
-使用 Pillow 生成视频所需的各种画面素材（无需外部 API）
+使用 Pillow 生成视频所需的各种画面素材(无需外部 API)
 
-生成内容：
-1. 渐变/主题色背景图（根据书籍分类自动选配色）
-2. 书籍封面卡片（书名+作者+装饰）
-3. 金句/要点卡片（从文案中提取关键段落）
+生成内容:
+1. 渐变/主题色背景图(根据书籍分类自动选配色)
+2. 书籍封面卡片(书名+作者+装饰)
+3. 金句/要点卡片(从文案中提取关键段落)
 4. 片头/片尾画面
-5. 装饰元素（分割线、图标等）
+5. 装饰元素(分割线、图标等)
 """
 
 import math
@@ -18,10 +18,10 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-from config import VIDEO_WIDTH, VIDEO_HEIGHT, FONTS_DIR, TEMPLATES_DIR
+from config import VIDEO_WIDTH, VIDEO_HEIGHT, FONTS_DIR, TEMPLATES_DIR, get_book_output_dir
 
 # ============================================================
-# 配色方案（按书籍分类/情绪）
+# 配色方案(按书籍分类/情绪)
 # ============================================================
 
 COLOR_THEMES = {
@@ -72,7 +72,7 @@ COLOR_THEMES = {
     },
 }
 
-# 书籍分类 → 配色
+# 书籍分类 -> 配色
 CATEGORY_TO_THEME = {
     "心理学": "calm",
     "自我成长": "inspiring",
@@ -220,7 +220,7 @@ def draw_rounded_rect(
 ):
     """绘制圆角矩形"""
     x1, y1, x2, y2 = xy
-    # 使用 Pillow 内置的圆角矩形（需要 Pillow 8.2+）
+    # 使用 Pillow 内置的圆角矩形(需要 Pillow 8.2+)
     draw.rounded_rectangle(xy, radius=radius, fill=fill)
 
 
@@ -238,14 +238,14 @@ def create_book_cover_card(
     card = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(card)
 
-    # 卡片背景（圆角半透明）
+    # 卡片背景(圆角半透明)
     draw_rounded_rect(draw, (0, 0, width, height), radius=30, fill=theme["card_bg"])
 
     # 顶部装饰线
     accent = theme["accent"]
     draw.rectangle([60, 50, width - 60, 54], fill=accent)
 
-    # 书名图标（书本符号）
+    # 书名图标(书本符号)
     icon_font = get_font(40)
     draw.text((width // 2 - 15, 70), "📖", font=icon_font, anchor="mt")
 
@@ -280,7 +280,7 @@ def create_book_cover_card(
     author_font = get_font(32)
     draw.text(
         (width // 2, 310),
-        f"作者：{book_author}",
+        f"作者:{book_author}",
         font=author_font,
         fill=theme["text_secondary"],
         anchor="mt",
@@ -290,7 +290,7 @@ def create_book_cover_card(
     slogan_font = get_font(24)
     draw.text(
         (width // 2, height - 60),
-        "每天一本好书 · 遇见更好的自己",
+        "每天一本好书 - 遇见更好的自己",
         font=slogan_font,
         fill=(*theme["accent"][:3], 150),
         anchor="mt",
@@ -330,9 +330,9 @@ def create_quote_card(
 
     # 引号装饰
     quote_font = get_font(60)
-    draw.text((110, 30), """, font=quote_font, fill=(*theme["accent"][:3], 100))
+    draw.text((110, 30), "\u201C", font=quote_font, fill=(*theme["accent"][:3], 100))
 
-    # 正文（自动换行）
+    # 正文(自动换行)
     body_font = get_font(36)
     wrapped = textwrap.fill(quote_text, width=16)
     draw.multiline_text(
@@ -355,7 +355,7 @@ def create_opening_frame(
 ) -> Image.Image:
     """
     生成片头画面
-    包含：背景 + 大号书名 + 钩子文案
+    包含: 背景 + 大号书名 + 钩子文案
     """
     if theme is None:
         theme = get_theme(category)
@@ -363,7 +363,7 @@ def create_opening_frame(
     img = create_themed_bg(theme)
     img_rgba = img.convert("RGBA")
 
-    # 半透明遮罩（让文字更清晰）
+    # 半透明遮罩(让文字更清晰)
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 80))
     img_rgba = Image.alpha_composite(img_rgba, overlay)
 
@@ -391,7 +391,7 @@ def create_opening_frame(
             anchor="mt",
         )
 
-    # 书名（大号）
+    # 书名(大号)
     title_font = get_font(72, bold=True)
     title_text = f"《{book_title}》"
     draw.text(
@@ -419,7 +419,7 @@ def create_opening_frame(
         fill=theme["accent"],
     )
 
-    # 钩子文案（如果有）
+    # 钩子文案(如果有)
     if hook_text:
         hook_font = get_font(42)
         wrapped = textwrap.fill(hook_text, width=18)
@@ -470,7 +470,7 @@ def create_content_frame(
     img_rgba = img.convert("RGBA")
     draw = ImageDraw.Draw(img_rgba)
 
-    # 顶部书名（小号）
+    # 顶部书名(小号)
     header_font = get_font(30)
     draw.text(
         (VIDEO_WIDTH // 2, 80),
@@ -505,7 +505,7 @@ def create_content_frame(
         fill=theme["accent"],
     )
 
-    # 核心要点卡片（居中显示）
+    # 核心要点卡片(居中显示)
     quote_card = create_quote_card(segment_text, theme, index=segment_index)
     card_x = (VIDEO_WIDTH - quote_card.width) // 2
     img_rgba.paste(quote_card, (card_x, 350), quote_card)
@@ -514,7 +514,7 @@ def create_content_frame(
     footer_font = get_font(24)
     draw.text(
         (VIDEO_WIDTH // 2, VIDEO_HEIGHT - 200),
-        "关注我 · 每天带你读一本好书",
+        "关注我 - 每天带你读一本好书",
         font=footer_font,
         fill=(*theme["text_secondary"][:3], 120),
         anchor="mt",
@@ -598,25 +598,25 @@ def split_script_to_segments(script: str) -> list[str]:
     将文案拆分成多个段落/观点
     用于生成不同的画面卡片
 
-    规则：
+    规则:
     1. 优先按句号/问号/感叹号分段
     2. 合并太短的段落
     3. 拆分太长的段落
     """
     # 按标点分句
     sentences = re.split(r'([。！？!?])', script)
-    # 重新组合（标点粘回前一句）
+    # 重新组合(标点粘回前一句)
     merged = []
     for i in range(0, len(sentences) - 1, 2):
         s = sentences[i] + (sentences[i + 1] if i + 1 < len(sentences) else "")
         s = s.strip()
         if s:
             merged.append(s)
-    # 最后一个（可能没有标点）
+    # 最后一个(可能没有标点)
     if len(sentences) % 2 == 1 and sentences[-1].strip():
         merged.append(sentences[-1].strip())
 
-    # 合并太短的句子（< 15字合并到下一句）
+    # 合并太短的句子(< 15字合并到下一句)
     segments = []
     buffer = ""
     for s in merged:
@@ -630,7 +630,7 @@ def split_script_to_segments(script: str) -> list[str]:
         else:
             segments.append(buffer)
 
-    # 拆分太长的段落（> 60字拆开）
+    # 拆分太长的段落(> 60字拆开)
     final = []
     for seg in segments:
         if len(seg) > 60:
@@ -658,26 +658,25 @@ def generate_all_frames(
     为一条视频生成全部画面帧图片
 
     Returns:
-        生成的图片文件路径列表（按顺序：片头 → 内容段落 → 片尾）
+        生成的图片文件路径列表(按顺序:片头 -> 内容段落 -> 片尾)
     """
     if output_dir is None:
-        output_dir = TEMPLATES_DIR / "frames"
+        output_dir = get_book_output_dir(book_title) / "frames"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     theme = get_theme(category)
     segments = split_script_to_segments(script)
 
     frames = []
-    safe_title = book_title.replace(" ", "_").replace("/", "_")
 
-    # 提取钩子（文案第一句）
+    # 提取钩子(文案第一句)
     hook = segments[0] if segments else ""
 
     # 1. 片头
     opening = create_opening_frame(
         book_title, book_author, category, hook_text=hook, theme=theme
     )
-    path = output_dir / f"{safe_title}_00_opening.png"
+    path = output_dir / "00_opening.png"
     opening.save(str(path))
     frames.append(path)
 
@@ -690,17 +689,17 @@ def generate_all_frames(
             book_title=book_title,
             theme=theme,
         )
-        path = output_dir / f"{safe_title}_{i+1:02d}_content.png"
+        path = output_dir / f"{i+1:02d}_content.png"
         content.save(str(path))
         frames.append(path)
 
     # 3. 片尾
     ending = create_ending_frame(book_title, theme=theme)
-    path = output_dir / f"{safe_title}_{len(segments)+1:02d}_ending.png"
+    path = output_dir / f"{len(segments)+1:02d}_ending.png"
     ending.save(str(path))
     frames.append(path)
 
-    print(f"已生成 {len(frames)} 张画面（片头1 + 内容{len(segments)} + 片尾1）")
+    print(f"已生成 {len(frames)} 张画面(片头1 + 内容{len(segments)} + 片尾1)")
     return frames
 
 
@@ -712,7 +711,7 @@ if __name__ == "__main__":
     parser.add_argument("--title", type=str, required=True, help="书名")
     parser.add_argument("--author", type=str, default="", help="作者")
     parser.add_argument("--category", type=str, default="心理学", help="分类")
-    parser.add_argument("--script", type=str, help="文案文本（直接输入）")
+    parser.add_argument("--script", type=str, help="文案文本(直接输入)")
     parser.add_argument("--script-file", type=str, help="文案文件路径")
     parser.add_argument("--output-dir", type=str, help="输出目录")
     parser.add_argument(
@@ -734,7 +733,7 @@ if __name__ == "__main__":
         print(f"预览已保存: {out}")
     else:
         if not script_text:
-            print("请提供文案：--script 或 --script-file")
+            print("请提供文案:--script 或 --script-file")
         else:
             out_dir = Path(args.output_dir) if args.output_dir else None
             frames = generate_all_frames(

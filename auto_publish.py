@@ -1,14 +1,27 @@
 """
 自动发布模块
 使用 Playwright 自动上传视频到抖音创作者平台
+
+内置风控策略:
+- 发布前敏感词检测
+- 每日发布上限
+- 操作间隔随机化(模拟人类)
+- 连续发布后自动休息
+- 跨平台标题差异化
 """
 
 import json
+import random
 import time
 from datetime import datetime
 from pathlib import Path
 
-from config import DOUYIN_COOKIE_PATH, VIDEOS_DIR
+from config import (
+    DOUYIN_COOKIE_PATH,
+    VIDEOS_DIR,
+    ACTION_DELAY_MIN,
+    ACTION_DELAY_MAX,
+)
 
 
 async def save_cookies(page, cookie_path: Path = DOUYIN_COOKIE_PATH):
@@ -178,10 +191,18 @@ async def upload_video(
         book: 书籍信息（用于自动选择音乐关键词）
     """
     from playwright.async_api import async_playwright
+    from safety import pre_publish_check, record_publish, random_delay
 
     video_path = Path(video_path)
     if not video_path.exists():
         raise FileNotFoundError(f"视频文件不存在: {video_path}")
+
+    # === 风控: 发布前检查 ===
+    passed, msg = pre_publish_check(title)
+    if not passed:
+        print(f"  [风控] 发布被拦截: {msg}")
+        return False
+    print(f"  [风控] 检查通过 ({msg})")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=headless)
@@ -200,7 +221,7 @@ async def upload_video(
             # 1. 进入发布页面
             await page.goto("https://creator.douyin.com/creator-micro/content/upload")
             await page.wait_for_load_state("networkidle")
-            time.sleep(2)
+            random_delay()  # 随机等待，模拟人类
 
             # 2. 检查是否需要重新登录
             if "login" in page.url.lower():
@@ -215,46 +236,46 @@ async def upload_video(
             await upload_input.set_input_files(str(video_path))
             print(f"正在上传: {video_path.name}")
 
-            # 等待上传完成（进度条消失或出现"重新上传"按钮）
             await page.wait_for_selector(
                 'text="重新上传"',
-                timeout=300000,  # 5分钟超时，大文件需要更长时间
+                timeout=300000,
             )
             print("上传完成！")
+            random_delay()
 
             # 4. 填写标题/描述
-            # 清空默认标题，输入自定义标题
             title_editor = await page.wait_for_selector(
                 'div[class*="editor"], div[contenteditable="true"]',
                 timeout=10000,
             )
             await title_editor.click()
+            random_delay(0.5, 1.0)
             await page.keyboard.press("Control+a")
             await page.keyboard.press("Delete")
 
-            # 输入标题
+            # 输入标题（随机打字速度，模拟人类）
             desc_text = title
             if tags:
                 tag_text = " ".join(f"#{tag}" for tag in tags)
                 desc_text = f"{title} {tag_text}"
-            await title_editor.type(desc_text, delay=50)
+            type_delay = random.randint(30, 80)  # 每字 30-80ms
+            await title_editor.type(desc_text, delay=type_delay)
 
-            time.sleep(1)
+            random_delay()
 
             # 5. 添加抖音平台音乐（可选）
             if use_douyin_music:
                 keyword = music_keyword or get_douyin_music_keyword(book=book)
                 print(f"正在添加抖音音乐（关键词: {keyword}）...")
                 await add_douyin_music(page, keyword)
+                random_delay()
 
             # 6. 定时发布（可选）
             if publish_time:
-                # 点击定时发布选项
                 schedule_radio = await page.query_selector('text="定时发布"')
                 if schedule_radio:
                     await schedule_radio.click()
-                    time.sleep(1)
-                    # 输入时间（具体选择器需根据实际页面调整）
+                    random_delay()
                     time_input = await page.query_selector(
                         'input[placeholder*="选择日期"]'
                     )
@@ -262,12 +283,15 @@ async def upload_video(
                         await time_input.fill(publish_time)
 
             # 7. 点击发布
-            time.sleep(2)
+            random_delay(1.5, 3.0)
             publish_btn = await page.wait_for_selector(
                 'button:has-text("发布")', timeout=10000
             )
             await publish_btn.click()
             print(f"视频已发布: {title}")
+
+            # === 风控: 记录发布 ===
+            record_publish(title, str(video_path))
 
             # 等待发布完成
             time.sleep(3)
@@ -289,17 +313,27 @@ async def upload_video(
 
 async def batch_upload(
     video_list: list[dict],
-    interval_seconds: int = 60,
 ):
     """
-    批量上传视频
+    批量上传视频（内置风控: 随机间隔 + 每日上限 + 定期休息）
 
     Args:
         video_list: [{"path": "xxx.mp4", "title": "xxx", "tags": [...], "publish_time": "xxx"}, ...]
-        interval_seconds: 每个视频之间的间隔（秒），避免被风控
     """
+    from safety import (
+        can_publish, random_publish_interval, should_rest, take_rest,
+    )
+
     total = len(video_list)
+    published = 0
+
     for i, video_info in enumerate(video_list, 1):
+        # 检查每日上限
+        ok, msg = can_publish()
+        if not ok:
+            print(f"\n  [风控] {msg}")
+            break
+
         print(f"\n--- 正在发布第 {i}/{total} 个视频 ---")
         success = await upload_video(
             video_path=video_info["path"],
@@ -308,13 +342,17 @@ async def batch_upload(
             publish_time=video_info.get("publish_time"),
         )
         if success:
+            published += 1
             print(f"第 {i} 个发布成功")
         else:
             print(f"第 {i} 个发布失败，跳过")
 
         if i < total:
-            print(f"等待 {interval_seconds} 秒后继续...")
-            time.sleep(interval_seconds)
+            # 检查是否需要休息
+            if should_rest(published):
+                take_rest()
+            else:
+                random_publish_interval()
 
     print(f"\n批量发布完成！共 {total} 个，请到抖音创作者平台确认。")
 

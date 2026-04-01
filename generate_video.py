@@ -34,6 +34,7 @@ from config import (
     VIDEOS_DIR,
     BGM_DIR,
     FONTS_DIR,
+    get_book_output_dir,
 )
 
 
@@ -174,13 +175,45 @@ def generate_video(
     voice_clip = AudioFileClip(str(voice_path))
     duration = voice_clip.duration
 
-    # 2. 生成画面帧图片
-    frame_paths = _generate_frames(book_title, book_author, category, script)
+    # 2. 尝试数字人视频（如果已启用）
+    try:
+        from digital_human import is_enabled as dh_enabled, generate_talking_video
+        if dh_enabled():
+            print("  正在生成数字人视频...")
+            dh_video = generate_talking_video(
+                audio_path=voice_path,
+                output_path=voice_path.parent / "talking_head.mp4",
+            )
+            if dh_video and dh_video.exists():
+                from moviepy import VideoFileClip, ColorClip
+                dh_clip = VideoFileClip(str(dh_video)).resized((VIDEO_WIDTH, VIDEO_HEIGHT))
+                if dh_clip.duration >= duration:
+                    dh_clip = dh_clip.subclipped(0, duration)
+                elif dh_clip.duration < duration:
+                    # 数字人视频比语音短，用最后一帧填充剩余时间
+                    pad = ColorClip(
+                        size=(VIDEO_WIDTH, VIDEO_HEIGHT),
+                        color=(18, 18, 18),
+                        duration=duration - dh_clip.duration,
+                    )
+                    dh_clip = concatenate_videoclips([dh_clip, pad])
+                bg_video = dh_clip
+                frame_paths = []
+                layers = [bg_video]
+                print("  数字人视频已生成，使用数字人画面")
+                _use_digital_human = True
+            else:
+                _use_digital_human = False
+        else:
+            _use_digital_human = False
+    except ImportError:
+        _use_digital_human = False
 
-    # 3. 将画面帧分配到时间轴上（带转场）
-    bg_video = _build_frame_sequence(frame_paths, duration)
-
-    layers = [bg_video]
+    # 3. 卡片画面（数字人未启用或生成失败时使用）
+    if not _use_digital_human:
+        frame_paths = _generate_frames(book_title, book_author, category, script, voice_path.parent)
+        bg_video = _build_frame_sequence(frame_paths, duration)
+        layers = [bg_video]
 
     # 4. 添加字幕层
     if subtitle_path:
@@ -232,10 +265,9 @@ def generate_video(
     final_audio = CompositeAudioClip(audio_tracks)
     video = video.with_audio(final_audio)
 
-    # 7. 导出
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_title = book_title.replace(" ", "_").replace("/", "_") if book_title else "video"
-    output_path = VIDEOS_DIR / f"{safe_title}_{timestamp}.mp4"
+    # 7. 导出（保存到语音文件所在目录，即当前集的目录）
+    output_dir = voice_path.parent
+    output_path = output_dir / "video.mp4"
 
     video.write_videofile(
         str(output_path),
@@ -258,6 +290,7 @@ def _generate_frames(
     book_author: str,
     category: str,
     script: str,
+    output_dir: Path = None,
 ) -> list[Path]:
     """
     生成视频画面帧
@@ -268,8 +301,9 @@ def _generate_frames(
     try:
         from generate_images import generate_all_frames
         if script:
+            frames_dir = (output_dir / "frames") if output_dir else None
             return generate_all_frames(
-                book_title, book_author, category, script
+                book_title, book_author, category, script, frames_dir
             )
     except ImportError:
         print("generate_images 模块不可用，使用纯色背景")

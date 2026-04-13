@@ -36,10 +36,14 @@ async def load_cookies(context, cookie_path: Path = DOUYIN_COOKIE_PATH):
     """加载已保存的 Cookie"""
     if not cookie_path.exists():
         return False
-    with open(cookie_path, "r", encoding="utf-8") as f:
-        cookies = json.load(f)
-    await context.add_cookies(cookies)
-    return True
+    try:
+        with open(cookie_path, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+        await context.add_cookies(cookies)
+        return True
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  Cookie 文件损坏: {e}，请重新登录")
+        return False
 
 
 async def login_douyin(playwright):
@@ -82,14 +86,16 @@ async def add_douyin_music(page, music_keyword: str = "读书"):
         music_keyword: 搜索关键词（如"读书"、"轻音乐"、"钢琴"）
     """
     try:
-        # 查找并点击"选择音乐"或"配乐"按钮
-        music_btn = await page.query_selector(
-            'text="选择音乐", text="配乐", text="添加音乐", '
-            'button:has-text("音乐"), div:has-text("选择配乐")'
-        )
-        if not music_btn:
-            # 尝试更宽泛的选择器
-            music_btn = await page.query_selector('[class*="music"], [class*="audio"]')
+        # 查找并点击"选择音乐"或"配乐"按钮（逐个尝试选择器）
+        music_btn = None
+        for selector in [
+            'text="选择音乐"', 'text="配乐"', 'text="添加音乐"',
+            'button:has-text("音乐")', 'div:has-text("选择配乐")',
+            '[class*="music"]', '[class*="audio"]',
+        ]:
+            music_btn = await page.query_selector(selector)
+            if music_btn:
+                break
 
         if not music_btn:
             print("  未找到音乐选择按钮，跳过（可能页面已改版）")
@@ -99,21 +105,28 @@ async def add_douyin_music(page, music_keyword: str = "读书"):
         time.sleep(2)
 
         # 在搜索框输入关键词
-        search_input = await page.query_selector(
-            'input[placeholder*="搜索"], input[placeholder*="音乐"], '
-            'input[type="text"][class*="search"]'
-        )
+        search_input = None
+        for selector in [
+            'input[placeholder*="搜索"]', 'input[placeholder*="音乐"]',
+            'input[type="text"][class*="search"]',
+        ]:
+            search_input = await page.query_selector(selector)
+            if search_input:
+                break
         if search_input:
             await search_input.fill(music_keyword)
             await page.keyboard.press("Enter")
             time.sleep(2)
 
         # 选择第一首音乐（通常是热门/推荐的）
-        # 查找"使用"按钮或音乐列表的第一项
-        use_btn = await page.query_selector(
-            'text="使用", button:has-text("使用"), '
-            'text="添加", button:has-text("添加")'
-        )
+        use_btn = None
+        for selector in [
+            'text="使用"', 'button:has-text("使用")',
+            'text="添加"', 'button:has-text("添加")',
+        ]:
+            use_btn = await page.query_selector(selector)
+            if use_btn:
+                break
         if use_btn:
             await use_btn.click()
             time.sleep(1)
@@ -121,10 +134,14 @@ async def add_douyin_music(page, music_keyword: str = "读书"):
             return True
 
         # 如果没找到"使用"按钮，尝试点击音乐列表第一项
-        first_music = await page.query_selector(
-            '[class*="music-item"]:first-child, '
-            '[class*="audio-item"]:first-child'
-        )
+        first_music = None
+        for selector in [
+            '[class*="music-item"]:first-child',
+            '[class*="audio-item"]:first-child',
+        ]:
+            first_music = await page.query_selector(selector)
+            if first_music:
+                break
         if first_music:
             await first_music.click()
             time.sleep(1)
@@ -139,14 +156,14 @@ async def add_douyin_music(page, music_keyword: str = "读书"):
         return False
 
 
-# 读书类视频常用的音乐搜索关键词
+# 书籍蒸馏类视频常用的音乐搜索关键词
 DOUYIN_MUSIC_KEYWORDS = {
     "calm": ["轻音乐", "钢琴曲", "安静读书", "舒缓纯音乐"],
     "inspiring": ["励志背景音乐", "正能量", "热血", "奋斗"],
     "emotional": ["感人音乐", "温暖", "治愈", "深情"],
     "thoughtful": ["沉思", "空灵", "氛围感", "冥想音乐"],
     "energetic": ["节奏感", "活力", "卡点音乐", "热门BGM"],
-    "default": ["读书BGM", "轻音乐", "纯音乐背景", "知识分享"],
+    "default": ["知识分享", "轻音乐", "纯音乐背景", "读书BGM"],
 }
 
 
@@ -236,11 +253,20 @@ async def upload_video(
             await upload_input.set_input_files(str(video_path))
             print(f"正在上传: {video_path.name}")
 
-            await page.wait_for_selector(
-                'text="重新上传"',
-                timeout=300000,
-            )
-            print("上传完成！")
+            try:
+                await page.wait_for_selector(
+                    'text="重新上传"',
+                    timeout=300000,
+                )
+                print("上传完成！")
+            except Exception:
+                # 检查是否有上传错误提示
+                error_el = await page.query_selector('[class*="error"], [class*="fail"]')
+                if error_el:
+                    error_text = await error_el.text_content()
+                    print(f"上传失败: {error_text}")
+                    return False
+                print("上传超时，但未检测到错误，继续尝试发布...")
             random_delay()
 
             # 4. 填写标题/描述
@@ -293,8 +319,13 @@ async def upload_video(
             # === 风控: 记录发布 ===
             record_publish(title, str(video_path))
 
-            # 等待发布完成
-            time.sleep(3)
+            # 等待发布完成（检测页面跳转或成功提示）
+            try:
+                await page.wait_for_url("**/manage**", timeout=10000)
+            except Exception:
+                # 可能没有跳转，等待一段时间确保操作完成
+                import asyncio as _asyncio
+                await _asyncio.sleep(3)
 
             await save_cookies(page)
             return True

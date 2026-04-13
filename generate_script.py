@@ -18,6 +18,7 @@ from config import (
     SCRIPT_PROMPT_TEMPLATE,
     TOPIC_PLAN_PROMPT,
     EPISODES_PER_BOOK,
+    DEFAULT_DURATION,
     BASE_DIR,
     get_book_output_dir,
 )
@@ -31,14 +32,21 @@ def load_book_list() -> list[dict]:
     book_list_path = BASE_DIR / "book_list.json"
     if not book_list_path.exists():
         return []
-    with open(book_list_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(book_list_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  书单文件读取失败: {e}")
+        return []
 
 
 def save_book_list(books: list[dict]):
     book_list_path = BASE_DIR / "book_list.json"
-    with open(book_list_path, "w", encoding="utf-8") as f:
+    # 原子写入：先写临时文件再重命名，防止写入中途崩溃导致数据丢失
+    tmp_path = book_list_path.with_suffix(".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(books, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(book_list_path)
 
 
 def get_next_pending_book(books: list[dict]) -> dict | None:
@@ -53,30 +61,33 @@ def get_next_pending_book(books: list[dict]) -> dict | None:
 # ============================================================
 
 def _call_llm(prompt: str, system: str = "", max_tokens: int = 2000) -> str:
-    if LLM_PROVIDER == "claude":
-        import anthropic
-        client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            system=system or "You are a helpful assistant.",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text.strip()
-    else:
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            temperature=0.8,
-            max_tokens=max_tokens,
-        )
-        return response.choices[0].message.content.strip()
+    try:
+        if LLM_PROVIDER == "claude":
+            import anthropic
+            client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+            response = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=max_tokens,
+                system=system or "You are a helpful assistant.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.content[0].text.strip()
+        else:
+            from openai import OpenAI
+            client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
+            response = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                temperature=0.8,
+                max_tokens=max_tokens,
+            )
+            return response.choices[0].message.content.strip()
+    except Exception as e:
+        raise RuntimeError(f"LLM 调用失败({LLM_PROVIDER}): {e}") from e
 
 
 # ============================================================
@@ -107,7 +118,12 @@ def plan_topics(book: dict, episode_count: int = None) -> list[dict]:
     # 提取 JSON
     json_match = re.search(r'\[.*\]', result, re.DOTALL)
     if json_match:
-        topics = json.loads(json_match.group())
+        try:
+            topics = json.loads(json_match.group())
+        except json.JSONDecodeError as e:
+            raise ValueError(f"AI 返回的 JSON 格式错误: {e}\n原文: {result[:300]}") from e
+        if not isinstance(topics, list) or not topics:
+            raise ValueError(f"AI 返回的选题为空或格式不正确: {result[:200]}")
         # 确保 episode 编号正确
         for i, topic in enumerate(topics):
             topic["episode"] = i + 1
@@ -149,7 +165,7 @@ def load_topic_plan(book_title: str) -> list[dict] | None:
 # 单集文案生成
 # ============================================================
 
-def generate_script(book: dict, duration: int = 60, episode: dict = None) -> str:
+def generate_script(book: dict, duration: int = DEFAULT_DURATION, episode: dict = None) -> str:
     """
     为指定书籍的某一集生成文案
 
@@ -220,7 +236,7 @@ def save_script(book: dict, script: str, output_dir: Path = None, episode: dict 
 def generate_all_episodes(
     book: dict,
     episode_count: int = None,
-    duration: int = 60,
+    duration: int = DEFAULT_DURATION,
 ) -> list[dict]:
     """
     为一本书生成全部集数的文案
@@ -231,6 +247,8 @@ def generate_all_episodes(
         [{"episode": dict, "script": str, "output_dir": Path}, ...]
     """
     episode_count = episode_count or EPISODES_PER_BOOK
+    if episode_count <= 0:
+        raise ValueError(f"集数必须为正整数，收到: {episode_count}")
     book_dir = get_book_output_dir(book["title"])
 
     # Step 1: 规划选题(或加载已有规划)
@@ -303,9 +321,9 @@ def get_pending_episodes(book: dict) -> list[dict]:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="读书类短视频文案生成器")
+    parser = argparse.ArgumentParser(description="书籍蒸馏 - 短视频文案生成器")
     parser.add_argument("--book", type=str, help="指定书名")
-    parser.add_argument("--duration", type=int, default=60, help="视频时长(秒)")
+    parser.add_argument("--duration", type=int, default=DEFAULT_DURATION, help=f"视频时长(秒，默认{DEFAULT_DURATION})")
     parser.add_argument("--episodes", type=int, help=f"生成集数(默认{EPISODES_PER_BOOK})")
     parser.add_argument("--plan-only", action="store_true", help="只生成选题规划，不生成文案")
     args = parser.parse_args()

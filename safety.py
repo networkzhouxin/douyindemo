@@ -54,9 +54,14 @@ def _load_sensitive_words() -> list[str]:
     return words
 
 
+_sensitive_pattern_cache = None
+
+
 def check_sensitive_words(text: str) -> list[str]:
     """
     检测文本中的敏感词
+
+    使用正则预编译模式提高检测效率（O(n) 而非 O(n*m)）
 
     Returns:
         命中的敏感词列表（空列表表示安全）
@@ -65,12 +70,17 @@ def check_sensitive_words(text: str) -> list[str]:
         return []
 
     words = _load_sensitive_words()
-    found = []
-    for word in words:
-        if word in text:
-            found.append(word)
+    if not words:
+        return []
 
-    return found
+    # 预编译正则（缓存），将所有敏感词合并为一个大的交替匹配模式
+    global _sensitive_pattern_cache
+    if _sensitive_pattern_cache is None:
+        escaped = [re.escape(w) for w in words]
+        _sensitive_pattern_cache = re.compile("|".join(escaped))
+
+    matches = _sensitive_pattern_cache.findall(text)
+    return list(set(matches))
 
 
 def check_content_safe(title: str, script: str = "") -> tuple[bool, list[str]]:
@@ -97,14 +107,20 @@ def check_content_safe(title: str, script: str = "") -> tuple[bool, list[str]]:
 def _load_publish_log() -> dict:
     """加载发布日志"""
     if PUBLISH_LOG_PATH.exists():
-        with open(PUBLISH_LOG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(PUBLISH_LOG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"  [风控] 发布日志读取失败: {e}，使用空日志")
     return {"daily": {}, "total": 0}
 
 
 def _save_publish_log(log: dict):
-    with open(PUBLISH_LOG_PATH, "w", encoding="utf-8") as f:
+    # 原子写入：先写临时文件再重命名，防止进程崩溃导致日志损坏
+    tmp_path = PUBLISH_LOG_PATH.with_suffix(".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(log, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(PUBLISH_LOG_PATH)
 
 
 def get_today_publish_count() -> int:
@@ -227,10 +243,11 @@ def vary_title(title: str, platform: str = "douyin") -> str:
 
     varied = title
 
-    # 随机同义替换
+    # 随机同义替换（只替换一对，且检查替换后不会与原标题相同）
     if random.random() < 0.3:
+        random.shuffle(_SYNONYMS)
         for old, new in _SYNONYMS:
-            if old in varied:
+            if old in varied and new not in varied:
                 varied = varied.replace(old, new, 1)
                 break
 
@@ -242,7 +259,7 @@ def vary_title(title: str, platform: str = "douyin") -> str:
     elif platform == "bilibili":
         # B站偏好中括号标签
         if not varied.startswith("【"):
-            prefix = random.choice(["【读书】", "【荐书】", "【好书】", ""])
+            prefix = random.choice(["【书籍蒸馏】", "【蒸馏精华】", "【好书蒸馏】", ""])
             varied = prefix + varied
     elif platform == "douyin":
         # 抖音保持简洁
@@ -260,10 +277,10 @@ def vary_tags(tags: list[str], platform: str = "douyin") -> list[str]:
 
     # 各平台额外标签
     platform_tags = {
-        "douyin": ["抖音读书", "BookTok"],
-        "xiaohongshu": ["读书笔记", "书单分享", "成长"],
-        "bilibili": ["读书", "知识区", "学习"],
-        "weixin": ["阅读", "书评", "读后感"],
+        "douyin": ["书籍蒸馏", "BookTok"],
+        "xiaohongshu": ["书籍蒸馏", "读书笔记", "精华提炼"],
+        "bilibili": ["书籍蒸馏", "知识区", "学习"],
+        "weixin": ["书籍蒸馏", "书评", "精华提炼"],
     }
 
     extra = platform_tags.get(platform, [])

@@ -77,21 +77,14 @@ def search_pixabay(query: str, mood: str = "", max_results: int = 5) -> list[dic
         print("免费注册: https://pixabay.com/api/docs/")
         return []
 
-    # Pixabay 音频搜索 API（注意：/api/videos/ 不含音频，需要用 Web 搜索方式）
-    # Pixabay 暂无官方音频 API 端点，使用其网站搜索
-    # 改为使用 Pixabay 视频 API + 音频类型筛选
-    # 注：Pixabay 2024 年后需要使用其 media API
-    params = urllib.parse.urlencode({
-        "key": PIXABAY_API_KEY,
-        "q": query,
-        "per_page": max_results,
-    })
-    url = f"https://pixabay.com/api/?{params}"
-
-    # 由于 Pixabay 音乐 API 可能有变化，这里提供备选方案
+    # Pixabay 目前没有公开稳定的音频 API 端点
+    # 其图片/视频 API (/api/, /api/videos/) 不支持音乐搜索
+    # 建议直接访问 Pixabay Music 网站手动下载，或使用 Freesound API
     print(f"[Pixabay] 搜索: {query}")
-    print(f"  提示: 如果 API 不可用，可以直接访问 https://pixabay.com/music/search/{urllib.parse.quote(query)}/")
-    print(f"  手动下载后放入 assets/bgm/ 目录即可")
+    print(f"  注意: Pixabay 暂无公开音频 API，请手动下载:")
+    print(f"  https://pixabay.com/music/search/{urllib.parse.quote(query)}/")
+    print(f"  下载后放入 assets/bgm/ 目录即可")
+    print(f"  或改用 Freesound API（配置 FREESOUND_API_KEY）自动下载")
 
     return []
 
@@ -131,7 +124,15 @@ def search_freesound(
     try:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
+            if resp.status != 200:
+                print(f"[Freesound] HTTP {resp.status}，搜索失败")
+                return []
+            raw = resp.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                print(f"[Freesound] 返回数据不是有效 JSON")
+                return []
 
         results = []
         for item in data.get("results", []):
@@ -179,13 +180,17 @@ def download_from_freesound(
 
         # 下载
         if not filename:
-            safe_name = re.sub(r'[^\w\-.]', '_', data.get("name", str(sound_id)))
+            safe_name = re.sub(r'[^\w\-.]', '_', data.get("name", str(sound_id)))[:50]
             filename = f"{safe_name}.mp3"
 
         output_path = output_dir / filename
 
         print(f"  正在下载: {data.get('name', '')} → {output_path.name}")
-        urllib.request.urlretrieve(preview_url, str(output_path))
+        # 带超时的下载（urlretrieve 不支持超时，改用 urlopen）
+        dl_req = urllib.request.Request(preview_url)
+        with urllib.request.urlopen(dl_req, timeout=60) as dl_resp:
+            with open(str(output_path), "wb") as out_f:
+                out_f.write(dl_resp.read())
 
         return output_path
 
@@ -231,7 +236,8 @@ def auto_download_bgm(
                     downloaded.append(existing[0])
                     continue
 
-                filename = f"{mood}_{item['id']}_{re.sub(r'[^\\w\\-.]', '_', item['name'][:30])}.mp3"
+                safe_name = re.sub(r'[^\w\-.]', '_', item['name'][:30])
+                filename = f"{mood}_{item['id']}_{safe_name}.mp3"
                 path = download_from_freesound(item["id"], output_dir, filename)
                 if path:
                     downloaded.append(path)

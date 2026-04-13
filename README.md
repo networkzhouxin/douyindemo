@@ -1,8 +1,8 @@
-# 读书类抖音账号 - 全自动内容生产线
+# 书籍蒸馏 - 抖音全自动内容生产线
 
-一套完整的 Python 自动化工具，从选书到发布全流程覆盖：
+把任意一本书的精华蒸馏成几分钟短视频，帮观众用最短时间吸收最有价值的内容。
 
-**书单采集 -> 选题规划(一书多集) -> AI文案 -> TTS语音 -> 画面合成 -> 视频导出 -> 自动发布**
+**书单采集 → 选题规划(一书多集蒸馏) → AI文案 → TTS语音 → 画面合成 → 视频导出 → 自动发布**
 
 ---
 
@@ -27,41 +27,41 @@
 | 环节 | 能力 | 依赖 |
 |------|------|------|
 | 书单采集 | 豆瓣热门榜爬取 + AI 智能推荐，自动去重补充 | 网络 / LLM API |
-| 选题规划 | AI 为每本书自动拆解 5-10 个不同角度的视频选题 | LLM API |
-| 文案生成 | 按选题逐集生成口播文案，支持 OpenAI/Claude/国内模型 | LLM API |
+| 选题规划 | AI 为每本书拆解 5-10 个蒸馏角度的视频选题 | LLM API |
+| 文案生成 | 按选题逐集生成高信息密度口播文案，支持 OpenAI/Claude/国内模型 | LLM API |
 | 语音合成 | Edge TTS(免费) + 说话风格/智能停顿，失败自动降级离线 | 网络(可离线) |
 | 声音克隆 | 录10-30秒样本，后续所有视频用你自己的声音(GPT-SoVITS/Fish Audio) | 本地GPU 或 API |
-| 画面生成 | Pillow 自动生成主题配色卡片(5套配色)，分段切换+转场 | 无 |
-| 数字人 | 上传一张照片，自动生成口播数字人视频(SadTalker/HeyGen) | 本地GPU 或 API |
+| 视频画面 | 3种模式: 应景视频素材+字幕(推荐) / 卡片画面 / 数字人口播 | Pexels API(免费) 或本地素材 |
 | BGM匹配 | 按书籍分类自动匹配情绪/自动下载/支持抖音平台音乐 | 可选 API |
 | 视频合成 | MoviePy 合成竖屏视频(1080x1920)，语音+字幕+画面+BGM | FFmpeg |
 | 自动发布 | Playwright 模拟浏览器发布到抖音，支持定时发布 | Playwright |
 | 风控安全 | 敏感词检测、每日限额、操作随机化、跨平台差异化 | 无 |
 
-### 一书多集示例
+### 一书多集蒸馏示例
 
-一本《被讨厌的勇气》自动拆出：
+一本《被讨厌的勇气》自动蒸馏出：
 
 | 集数 | 类型 | 选题 |
 |------|------|------|
-| EP01 | 反常识 | 你为什么总在意别人的看法? |
-| EP02 | 核心观点 | 所有的烦恼都来自人际关系 |
-| EP03 | 方法论 | 课题分离: 学会分清什么是你的事 |
-| EP04 | 金句 | 这本书里最扎心的5句话 |
-| EP05 | 一句话总结 | 60秒说清这本书讲了什么 |
+| EP01 | 反常识蒸馏 | 你为什么总在意别人的看法? |
+| EP02 | 核心蒸馏 | 所有的烦恼都来自人际关系 |
+| EP03 | 方法蒸馏 | 课题分离: 学会分清什么是你的事 |
+| EP04 | 金句蒸馏 | 这本书里最扎心的5句话 |
+| EP05 | 一句话蒸馏 | 90秒说清这本书讲了什么 |
 
 ### 输出目录结构
 
 ```
 output/
 ├── 被讨厌的勇气/
-│   ├── topic_plan.json               # 选题规划
+│   ├── topic_plan.json               # 蒸馏选题规划
 │   ├── ep01_你为什么总在意别人的看法/
 │   │   ├── script.txt                # 文案
 │   │   ├── voice.mp3                 # 语音
 │   │   ├── voice.srt                 # 字幕
-│   │   ├── frames/                   # 画面帧
-│   │   └── video.mp4                 # 最终视频
+│   │   ├── bg_cache/                 # 视频素材缓存 (video模式)
+│   │   ├── frames/                   # 画面帧 (cards模式)
+│   │   └── video.mp4                 # 最终视频 (90s)
 │   ├── ep02_所有的烦恼都来自人际关系/
 │   │   └── ...
 │   └── report.json                   # 生成报告
@@ -133,7 +133,7 @@ export OPENAI_MODEL="moonshot-v1-8k"
 ### 5. 运行
 
 ```bash
-# 全自动: 1本书 x 5集 = 5条视频
+# 全自动: 1本书 x 5集 = 5条视频 (每集90秒)
 python main.py auto
 
 # 3本书 x 5集 = 15条视频
@@ -141,7 +141,12 @@ python main.py auto --books 3
 
 # 2本书 x 8集 = 16条视频
 python main.py auto --books 2 --episodes 8
+
+# 自定义时长
+python main.py auto --duration 120
 ```
+
+启动时会自动校验配置（API Key、FFmpeg 等），有问题会提前警告。
 
 ---
 
@@ -150,15 +155,16 @@ python main.py auto --books 2 --episodes 8
 ```
 douyindemo/
 ├── config.py              # 全局配置(API密钥/视频参数/风控/声音克隆/数字人等)
-├── main.py                # 主入口: 全自动流水线
+├── main.py                # 主入口: 全自动蒸馏流水线
 │
 ├── book_list.json         # 书单数据库(自动维护)
 ├── book_crawler.py        # 书单采集(豆瓣+AI推荐)
 │
-├── generate_script.py     # 选题规划 + AI文案生成(一书多集)
+├── generate_script.py     # 选题规划 + AI文案生成(一书多集蒸馏)
 ├── generate_voice.py      # TTS语音合成(Edge/Azure/离线/声音克隆)
-├── generate_images.py     # 画面帧生成(Pillow，5套主题配色)
-├── generate_video.py      # 视频合成(MoviePy，支持数字人画面)
+├── generate_images.py     # 画面帧生成(Pillow，5套主题配色，cards模式)
+├── bg_video.py            # 视频素材获取(本地+Pexels API，video模式)
+├── generate_video.py      # 视频合成(MoviePy，3种画面模式)
 ├── digital_human.py       # 数字人视频(SadTalker/HeyGen)
 │
 ├── bgm_matcher.py         # BGM智能匹配(规则/AI情绪/Suno)
@@ -173,6 +179,10 @@ douyindemo/
 └── assets/
     ├── fonts/             # 自定义字体
     ├── bgm/               # 背景音乐(按情绪分子目录)
+    ├── bg_videos/         # 视频素材(按分类/情绪分子目录，video模式用)
+    │   ├── 心理学/        # 按书籍分类
+    │   ├── calm/          # 按情绪
+    │   └── *.mp4          # 通用素材
     ├── templates/         # 视频模板
     ├── voice_sample/      # 你的声音样本(声音克隆用)
     │   └── sample.wav     # 10-30秒清晰人声
@@ -187,10 +197,13 @@ douyindemo/
 ### 全自动模式
 
 ```bash
-python main.py auto                          # 1本书 x 5集
+python main.py auto                          # 1本书 x 5集 = 5条视频
 python main.py auto --books 3                # 3本书 x 5集 = 15条视频
 python main.py auto --books 2 --episodes 8   # 2本书 x 8集 = 16条视频
+python main.py auto --duration 120           # 每集120秒(深度蒸馏)
 python main.py auto --books 1 --publish      # 生成并自动发布
+python main.py auto --voice-sample calm      # 指定使用特定的声音样本
+python main.py auto --only-voice             # 仅生成文案和语音，不合成视频
 ```
 
 ### 指定一本书
@@ -198,6 +211,8 @@ python main.py auto --books 1 --publish      # 生成并自动发布
 ```bash
 python main.py book "被讨厌的勇气"               # 默认5集
 python main.py book "被讨厌的勇气" --episodes 10  # 10集
+python main.py book "被讨厌的勇气" --voice-sample energetic # 指定声音
+python main.py book "被讨厌的勇气" --only-voice   # 快速测试声音效果
 ```
 
 ### 只看选题规划(不生成视频)
@@ -231,6 +246,11 @@ python generate_voice.py --list-voices
 # 视频
 python generate_video.py --voice xxx.mp3 --subtitle xxx.srt --title "书名"
 
+# 视频素材(video模式)
+python bg_video.py setup                              # 创建素材目录
+python bg_video.py search "peaceful nature"            # 搜索 Pexels
+python bg_video.py download --category 心理学           # 按分类批量下载
+
 # BGM
 python bgm_matcher.py guide                          # 查看分类指南
 python bgm_matcher.py match --book "被讨厌的勇气"     # 测试匹配
@@ -239,7 +259,7 @@ python download_bgm.py guide                          # 免费音乐下载指南
 
 # 发布
 python auto_publish.py login                          # 首次登录(扫码)
-python auto_publish.py upload --video xxx.mp4 --title "xxx" --tags 读书 好书推荐
+python auto_publish.py upload --video xxx.mp4 --title "xxx" --tags 书籍蒸馏 好书推荐
 python auto_publish.py upload --video xxx.mp4 --title "xxx" --douyin-music
 ```
 
@@ -252,18 +272,18 @@ python auto_publish.py upload --video xxx.mp4 --title "xxx" --douyin-music
 | 来源 | 说明 | 需要API |
 |------|------|---------|
 | 豆瓣热门 | 按分类爬取豆瓣读书热门榜，提取书名/作者/简介/评分 | 不需要 |
-| AI推荐 | LLM 按分类推荐适合做短视频的书，自动生成结构化数据 | 需要 |
+| AI推荐 | LLM 按分类推荐适合做"蒸馏"内容的书（信息密度高、有核心方法论） | 需要 |
 | 自动补充 | 书单 pending 数量低于阈值(默认5)时自动触发采集 | - |
 
 支持的分类: 心理学、自我成长、商业、沟通、历史、哲学、科学、文学(可在 config.py 中修改)。
 
 ### 5.2 文案生成 (generate_script.py)
 
-**一书多集流程:**
+**一书多集蒸馏流程:**
 
-1. AI 分析书籍，规划 N 个选题(不同角度: 核心观点/金句/方法论/故事/反常识/对比...)
+1. AI 分析书籍，规划 N 个蒸馏角度(核心蒸馏/金句蒸馏/方法蒸馏/故事蒸馏/反常识蒸馏...)
 2. 选题保存为 `topic_plan.json`，支持断点续跑
-3. 逐集生成文案，每集紧扣选题展开，不会内容重复
+3. 逐集生成文案，每集紧扣选题展开，高信息密度，不会内容重复
 
 **支持的 LLM:**
 
@@ -298,10 +318,10 @@ python auto_publish.py upload --video xxx.mp4 --title "xxx" --douyin-music
 
 | 内容类型 | 语音 | 风格 |
 |---------|------|------|
-| 拆书解读 | YunxiNeural | narration-relaxed |
-| 深度思考 | YunjianNeural | documentary-narration |
-| 情感文学 | XiaoxiaoNeural | gentle |
-| 书单推荐 | XiaoyiNeural | cheerful |
+| 核心蒸馏/方法蒸馏 | YunxiNeural | narration-relaxed |
+| 深度蒸馏/哲学类 | YunjianNeural | documentary-narration |
+| 情感/文学蒸馏 | XiaoxiaoNeural | gentle |
+| 快节奏书单盘点 | XiaoyiNeural | cheerful |
 
 **国内网络连不上微软服务器时:**
 
@@ -328,28 +348,54 @@ export HTTPS_PROXY=http://127.0.0.1:7890
 
 ```bash
 # 1. 录音: 10-30秒清晰人声，无背景噪音，WAV格式
-#    放到 assets/voice_sample/sample.wav
+#    放到 assets/voice_sample/default/sample.wav
+#    同时在该目录下新建 text.txt，填入这10秒录音的原话。
 
 # 2. 选择方案，编辑 config.py:
 TTS_PROVIDER = "clone"
-
-# 方案A: GPT-SoVITS(本地部署)
 VOICE_CLONE_ENGINE = "gpt_sovits"
-GPT_SOVITS_REF_AUDIO = "assets/voice_sample/sample.wav"
-GPT_SOVITS_REF_TEXT = "这里填你录音说的那段话的文字内容"
-# 需要先部署: https://github.com/RVC-Boss/GPT-SoVITS
-
-# 方案B: Fish Audio(在线API，最简单)
-VOICE_CLONE_ENGINE = "fish_audio"
-FISH_AUDIO_API_KEY = "your-key"        # https://fish.audio 注册获取
-FISH_AUDIO_MODEL_ID = "your-model-id"  # 上传样本后获取
+VOICE_SAMPLE_NAME = "default"  # 使用 default 文件夹的样本
 ```
+
+> **💡 高级技巧：语音样本池（一键换声音）**
+> 
+> 你可以根据不同类型的书，准备不同情绪的语音样本（如：严肃、活力、治愈）。
+> 
+> 1. 在 `assets/voice_sample/` 下建立多个子目录：
+>    - `assets/voice_sample/energetic/sample.wav` + `text.txt`
+>    - `assets/voice_sample/calm/sample.wav` + `text.txt`
+> 2. 运行时直接通过参数指定使用哪个声音，无需修改代码：
+> ```bash
+> python main.py book "认知觉醒" --voice-sample energetic
+> python main.py auto --voice-sample calm
+> ```
+> 
+> 3. **调试模式**：如果你只想快速听听配音效果而不关心画面，可以加上 `--only-voice`：
+> ```bash
+> python main.py auto --voice-sample hm --only-voice
+> ```
 
 **录音要求:**
 - 安静环境，无背景噪音、回声
 - 说话自然，语速适中(不要刻意播音腔)
 - WAV 格式，16kHz 以上，单声道
 - 时长 10-30 秒(内容随意，可以读一段书)
+
+> **💡 炼丹秘籍：用于训练 GPT-SoVITS 的素材文案推荐**
+> 
+> 为了让 AI 学习到你最自然、多样的语调，建议分批录制以下 4 种风格的素材（总长 5-10 分钟）：
+> 
+> 1. **基础沉稳（适合知识分享）**：
+>    “很多人问我，为什么要读这么多书？其实读书不是为了记住每一个字，而是为了在某个瞬间，能用前人的智慧来对抗生活的平庸。今天我们要拆解的这本书叫《认知觉醒》。作者提到一个核心观点：人与人之间的根本差异，并不在于努力程度，而是在于思维模型。”
+> 
+> 2. **高能钩子（适合视频开头，语速稍快）**：
+>    “别再用战术上的勤奋，来掩盖战略上的懒惰了！你是不是也经常觉得自己很忙，但一年到头发现什么都没留下？听着，这可能不是你的能力问题，而是你的底层逻辑出错了。今天我只用三分钟，把这本书里最扎心的五个真相拆穿。”
+> 
+> 3. **深度共情（低沉缓慢，有温度）**：
+>    “其实，我们每个人的一生，都在寻找一种叫‘课题分离’的能力。就像《被讨厌的勇气》里说的那样，别人的评价，那是别人的课题，而你如何看待自己，才是你的课题。学会放下那些不属于你的负担，你会发现世界其实很简单。”
+> 
+> 4. **自然生活（像聊天一样，增加真实感）**：
+>    “哎，说实话啊，我以前也觉得读书挺枯燥的。翻两页就想玩手机，对吧？后来我发现，其实是因为我没找对方法。你就把书里的作者，想象成一个顶级大佬坐在你对面，正跟你喝茶聊天呢。他把这辈子的避坑指南都告诉你了。”
 
 **GPT-SoVITS 部署:**
 ```bash
@@ -362,18 +408,69 @@ python api.py  # 启动API服务(默认端口9880)
 
 > 声音克隆失败时会自动降级到 Edge TTS，不影响整体流程。
 
-### 5.5 画面生成 (generate_images.py)
+### 5.5 视频画面 — 三种模式
+
+通过 `config.py` 中的 `VIDEO_BG_MODE` 切换画面模式:
+
+```python
+VIDEO_BG_MODE = "video"           # 应景视频素材 + 大字幕（默认，推荐）
+VIDEO_BG_MODE = "cards"           # Pillow 卡片画面（无需外部资源）
+VIDEO_BG_MODE = "digital_human"   # 数字人口播（需要 GPU 或付费 API）
+```
+
+**三种模式对比:**
+
+| 模式 | 画面效果 | 外部依赖 | 适合场景 |
+|------|---------|---------|---------|
+| `video` | 应景视频+暗层+大字幕，最主流知识类风格 | Pexels API(免费) 或本地素材 | **推荐日常使用** |
+| `cards` | Pillow 卡片画面，质感有限 | 无 | 无网络/无素材时兜底 |
+| `digital_human` | 数字人口播，最有真人感 | GPU 或付费API | 有条件时效果最好 |
+
+#### video 模式（默认推荐）
+
+应景视频素材 + 半透明暗层(35%) + 大号字幕，是抖音知识类最主流的画面风格。
+
+**素材来源(自动降级):**
+
+| 优先级 | 来源 | 说明 |
+|--------|------|------|
+| 1 | 本地素材 `assets/bg_videos/` | 按分类放竖屏 MP4 |
+| 2 | Pexels API | 免费注册，按分类自动搜索下载并缓存 |
+| 3 | 降级为 cards 模式 | 无素材时兜底 |
+
+**快速上手:**
+
+```bash
+# 1. 免费注册 Pexels API Key: https://www.pexels.com/api/
+# 2. 配置
+export PEXELS_API_KEY="你的key"
+# 3. 直接跑（自动按书籍分类搜索应景素材）
+python main.py auto
+```
+
+**手动准备素材:**
+
+```bash
+# 创建目录结构
+python bg_video.py setup
+
+# 把竖屏视频放进去即可
+assets/bg_videos/心理学/meditation_01.mp4
+assets/bg_videos/商业/city_skyline.mp4
+assets/bg_videos/通用素材.mp4
+```
+
+自动根据书籍分类匹配关键词搜索(如心理学→meditation, thinking)，横屏素材自动居中裁剪为竖屏，不够长自动循环拼接。
+
+#### cards 模式
 
 基于 Pillow 自动生成，无需外部 API:
 
 - 5 套主题配色(根据书籍分类自动选择)
-- 渐变背景 + 装饰光点
-- 书籍封面卡片(书名+作者+装饰)
-- 金句/观点卡片(文案自动拆段，每段一张卡片)
-- 片头(书名+钩子) + 片尾(关注CTA)
+- 渐变背景 + 装饰光点 + 暗角效果
+- 书籍封面卡片 + 金句/观点卡片
+- 片头 + 片尾("书籍蒸馏"品牌CTA)
 - 画面之间淡入淡出转场
-
-**5 套配色:**
 
 | 配色 | 适用分类 | 风格 |
 |------|---------|------|
@@ -383,7 +480,7 @@ python api.py  # 启动API服务(默认端口9880)
 | 深邃绿 | 投资、科学 | 深绿渐变+青绿 |
 | 电光紫 | 书单、盘点 | 深紫渐变+亮紫 |
 
-> **注意:** Pillow 生成的画面质感有限，与剪映/CapCut 等专业工具有差距。如果追求更高质量，建议用本项目生成文案+语音后，手动导入剪映制作视频(见第八章建议)。启用数字人(5.6)后画面质感会有质的提升。
+> cards 模式的画面质感有限。如果追求更高质量但不想用 video 模式，建议用本项目生成文案+语音后，手动导入剪映制作视频。
 
 ### 5.6 数字人 (digital_human.py)
 
@@ -421,19 +518,11 @@ python main.py auto
 
 **照片要求:**
 - 正面或微侧(15度以内)
-- 半身照或头肩照，人脸占画面 30%+ 
+- 半身照或头肩照，人脸占画面 30%+
 - 光线均匀，无强烈阴影
 - 背景简洁(纯色或虚化最佳)
 - 嘴巴自然闭合
 - 分辨率 512x512 以上
-
-**SadTalker 部署:**
-```bash
-git clone https://github.com/OpenTalker/SadTalker
-cd SadTalker
-pip install -r requirements.txt
-# 下载预训练模型(见项目README)
-```
 
 > 没有 GPU 或不想部署? 推荐直接用**腾讯智影**或**硅基流动**的在线免费额度，手动生成数字人视频后放到对应 ep 目录即可。
 
@@ -470,12 +559,17 @@ BGM 按情绪分 5 个子目录(calm/inspiring/emotional/thoughtful/energetic)�
 |------|---------|------|
 | AI文案 | `LLM_PROVIDER` `OPENAI_API_KEY` `OPENAI_BASE_URL` | LLM选择和密钥 |
 | 语音 | `TTS_PROVIDER` `EDGE_TTS_VOICE` `EDGE_TTS_STYLE` | TTS引擎和风格 |
+| 画面模式 | `VIDEO_BG_MODE` | `"video"`(默认) / `"cards"` / `"digital_human"` |
+| 视频素材 | `PEXELS_API_KEY` `BG_VIDEOS_DIR` `BG_VIDEO_KEYWORDS` | video模式的素材来源和关键词映射 |
 | 视频 | `VIDEO_WIDTH` `VIDEO_HEIGHT` `VIDEO_FPS` | 视频尺寸帧率 |
-| 字幕 | `SUBTITLE_FONT_SIZE` `SUBTITLE_FONT_COLOR` | 字幕样式 |
+| 时长 | `DEFAULT_DURATION=90` | 每集90秒(约360字) |
+| 集数 | `EPISODES_PER_BOOK=5` | 每本书蒸馏5个角度 |
+| 字幕 | `SUBTITLE_FONT_SIZE` `SUBTITLE_FONT_COLOR` | 字幕样式(video模式自动放大1.3倍) |
 | BGM | `BGM_SOURCE` | 背景音乐来源 |
 | 发布 | `PUBLISH_TIMES` `DAILY_PUBLISH_LIMIT` | 发布时间和限额 |
 | 风控 | `PUBLISH_INTERVAL_*` `SENSITIVE_WORDS_ENABLED` | 安全策略 |
-| 书单 | `EPISODES_PER_BOOK` `BOOK_LIST_MIN_PENDING` | 一书多集和书单采集 |
+| 书单 | `BOOK_LIST_MIN_PENDING` `BOOK_TARGET_CATEGORIES` | 书单采集 |
+| 校验 | `validate_config()` | 启动时自动校验API Key/FFmpeg/画面模式等 |
 
 ---
 
@@ -483,7 +577,7 @@ BGM 按情绪分 5 个子目录(calm/inspiring/emotional/thoughtful/energetic)�
 
 ### 7.1 敏感词检测
 
-发布前自动扫描标题和文案，命中敏感词则拦截发布。
+发布前自动扫描标题和文案，命中敏感词则拦截发布。使用预编译正则匹配，性能高效。
 
 - 词库文件: `sensitive_words.txt`(每行一个词，支持自行扩充)
 - 覆盖: 政治/违法/虚假宣传/侵权/引流/低俗等
@@ -507,7 +601,7 @@ BGM 按情绪分 5 个子目录(calm/inspiring/emotional/thoughtful/energetic)�
 
 ### 7.4 发布日志
 
-每次发布自动记录到 `publish_log.json`，包含每日计数和发布历史。
+每次发布自动记录到 `publish_log.json`（原子写入，防崩溃丢失），包含每日计数和发布历史。
 
 查看统计: `python main.py stats`
 
@@ -526,8 +620,9 @@ BGM 按情绪分 5 个子目录(calm/inspiring/emotional/thoughtful/energetic)�
 
 | 环节 | 局限 | 影响 |
 |------|------|------|
-| 画面质量 | Pillow 生成的卡片质感有限，与剪映差距大 | 视频在抖音上竞争力偏低 |
-| TTS音质 | Edge TTS 听3秒能辨别是AI，与真人配音有差距 | 影响完播率 |
+| 画面质量 | video 模式依赖素材质量；cards 模式卡片质感有限 | video 模式已大幅改善，cards 模式竞争力偏低 |
+| TTS音质 | Edge TTS 听3秒能辨别是AI，与真人配音有差距 | 建议尽早切换声音克隆 |
+| 视频素材 | Pexels 素材不一定完美匹配书籍内容 | 可手动补充精准素材到 assets/bg_videos/ |
 | 自动发布 | 选择器基于推测，抖音改版后需手动调试 | 首次使用大概率需要适配 |
 | 豆瓣爬取 | 可能被反爬拦截 | 降级到AI推荐即可 |
 | 文案质量 | 依赖AI模型水平，没有质量评估机制 | 个别文案可能平庸 |
@@ -535,64 +630,69 @@ BGM 按情绪分 5 个子目录(calm/inspiring/emotional/thoughtful/energetic)�
 
 ### 推荐使用方式
 
-**阶段一: 半自动(推荐新手先这样做)**
+**阶段一: 快速起步(推荐)**
 
-1. 用本项目生成文案(这是最省时间的部分)
-2. 把文案复制到**剪映**，用剪映的 TTS + 模板制作视频(质量远超本项目的画面方案)
-3. 通过抖音创作者平台手动发布，观察数据
-4. 跑通 5-10 条后，确认哪些选题/风格数据好
+1. 配置 LLM API Key + Pexels API Key(都免费)
+2. `python main.py auto` 全自动生成(video 模式 + Edge TTS)
+3. 手动发布到抖音，观察数据
+4. 跑通 5-10 条后，确认哪些蒸馏角度数据好
 
-**阶段二: 提升自动化**
+**阶段二: 提升辨识度**
 
-- 文案+语音全自动(本项目已支持)
-- 视频画面接入更好的方案:
-  - 数字人 API(硅基流动/腾讯智影，有免费额度)
-  - AI 生成配图(通义万相/可灵)替代纯色卡片
-- 自动发布调通后开启
+- 录制声音样本，启用声音克隆(`TTS_PROVIDER="clone"`)
+- 积累本地精品素材到 `assets/bg_videos/`，替代 Pexels 通用素材
+- 调通自动发布(`auto_publish.py`)
 
 **阶段三: 全自动+数据驱动**
 
-- 全流程自动化
+- 全流程自动化(文案→语音→视频→发布)
 - 加入数据回收(爬取播放量/点赞)
-- 根据数据自动调整选题方向和风格
+- 根据数据自动调整蒸馏方向和风格
 
 ### 视频质量提升路径
 
 | 优先级 | 方案 | 配置方式 | 效果提升 |
 |--------|------|---------|---------|
-| 1 | 启用声音克隆 | `TTS_PROVIDER="clone"` + 录 30 秒人声 | 大 — 声音有辨识度，不再是千篇一律的AI腔 |
-| 2 | 启用数字人 | `DIGITAL_HUMAN_ENGINE="sadtalker"` + 一张照片 | 很大 — 有"人"在画面里，完播率显著提升 |
-| 3 | 手动用剪映制作 | 本项目生成文案+语音，导入剪映做画面 | 很大 — 最推荐的起步方式 |
-| 4 | AI 生成配图 | 通义万相/可灵 替代纯色背景 | 中 |
+| 1 | **启用 video 模式** | `VIDEO_BG_MODE="video"` + `PEXELS_API_KEY` | 很大 — 应景画面+字幕，最主流知识类风格 |
+| 2 | 启用声音克隆 | `TTS_PROVIDER="clone"` + 录 30 秒人声 | 大 — 声音有辨识度，不再是千篇一律的AI腔 |
+| 3 | 启用数字人 | `DIGITAL_HUMAN_ENGINE="sadtalker"` + 一张照片 | 很大 — 有"人"在画面里，完播率显著提升 |
+| 4 | 手动用剪映制作 | 本项目生成文案+语音，导入剪映做画面 | 很大 — 画面质量最高 |
 | 5 | 用更好的 LLM | GPT-4o / Claude | 中 — 文案质量明显优于免费模型 |
 
 ---
 
 ## 九、账号运营指南
 
-### 9.1 账号定位
+### 9.1 "书籍蒸馏"账号定位
 
-| 方向 | 特点 | 自动化适配度 |
-|------|------|-------------|
-| 金句/名言 | 门槛低，适合批量 | 最高 |
-| 书单推荐 | 起号快，同质化严重 | 高 |
-| 拆书解读 | 有深度，粘性强 | 高(一书多集很适合) |
-| 故事型 | 完播率高，文案要求高 | 中 |
-| 真人出镜 | 粉丝粘性最强 | 低(需要人) |
+**核心理念:** 把一本书的精华蒸馏成几分钟短视频，让观众用最短时间吸收最有价值的内容。
+
+**差异化优势:**
+- "蒸馏"这个概念比"拆书/读书推荐"更有辨识度
+- 暗示高信息密度——每句话都有干货，没有废话
+- 适用于任意书籍，不限品类
+- 一书多集蒸馏不同角度，粉丝追更性强
+
+**内容风格:**
+- 开头即钩子，3秒抓住注意力
+- 每集只攻一个点，讲透讲深
+- 信息密度高，节奏紧凑
+- 口语化，像朋友聊天，不像老师讲课
+- 结尾金句收尾 + "关注书籍蒸馏"
 
 ### 9.2 发布策略
 
 - **频率:** 每天 1-2 条(坚持比数量重要)
 - **时间:** 早 7-9 点、中午 12-13 点、晚 20-22 点
-- **标签:** `#读书` `#好书推荐` `#书单` + 书名相关标签
+- **标签:** `#书籍蒸馏` `#好书推荐` `#读书` + 书名相关标签
 - **前5条:** 不追数据，找节奏
 - **互动:** 前期每条评论都回复
 
 ### 9.3 变现路径
 
 1. **抖音橱窗带货**(卖书) - 1000粉即可开通，最直接
-2. **知识付费**(读书社群/课程)
-3. **直播带货**(讲书+卖书)
+2. **知识付费**(蒸馏书单社群/精读课程)
+3. **直播带货**(现场蒸馏一本书+卖书)
 4. **广告接单**(出版社/知识类APP)
 5. **引流私域**(微信读书社群)
 
@@ -623,7 +723,22 @@ TTS_PROVIDER = "offline"
 ```
 
 ### Q: 视频质量不够好?
-这是已知局限(见第八章)。建议用本项目生成文案+语音，手动导入剪映制作视频。
+首先确认已切换到 video 模式(`VIDEO_BG_MODE="video"`)，配合 Pexels API 自动获取应景素材，效果远好于默认卡片。
+如果还不满意，建议用本项目生成文案+语音，手动导入剪映制作视频。
+
+### Q: video 模式怎么配置?
+```bash
+# 1. 免费注册: https://www.pexels.com/api/
+# 2. 设置环境变量或编辑 config.py
+export PEXELS_API_KEY="你的key"
+# 3. 确认 config.py 中 VIDEO_BG_MODE = "video" (默认已是)
+# 4. 直接运行，自动按分类搜索下载应景素材
+python main.py auto
+```
+也可以手动放竖屏 MP4 到 `assets/bg_videos/` 目录，会优先使用本地素材。
+
+### Q: 没有 Pexels API Key，video 模式能用吗?
+可以手动放视频素材到 `assets/bg_videos/` 目录。如果既没有 API Key 也没有本地素材，会自动降级为 cards 卡片模式。
 
 ### Q: 抖音发布失败?
 1. Cookie 过期: 重新运行 `python auto_publish.py login`
@@ -633,8 +748,11 @@ TTS_PROVIDER = "offline"
 ### Q: 如何换AI模型?
 编辑 `config.py` 中的 `OPENAI_BASE_URL` 和 `OPENAI_MODEL`，支持所有兼容 OpenAI 接口的模型。
 
-### Q: 一本书生成几集合适?
+### Q: 一本书蒸馏几集合适?
 热门书 5-8 集，内容特别丰富的可以 10 集。在 `config.py` 中设置 `EPISODES_PER_BOOK`，或命令行 `--episodes N`。
+
+### Q: 每集多长合适?
+默认 90 秒(约360字)，适合单点蒸馏。深度方法论/故事型可以 `--duration 120`。不建议超过 3 分钟，会影响完播率，也不符合"蒸馏"的精炼调性。
 
 ### Q: 如何增加新的书籍分类?
 编辑 `config.py` 中的 `BOOK_TARGET_CATEGORIES` 列表即可。
@@ -659,20 +777,25 @@ DIGITAL_HUMAN_ENGINE = "sadtalker"  # 数字人
 - 10-30 秒即可，内容随意(读一段书最自然)
 - WAV 格式，用手机录音转 WAV 也行
 
+### Q: 启动时提示配置警告?
+`main.py` 启动时会自动调用 `validate_config()` 校验 API Key、FFmpeg、TTS 配置等。根据提示修复即可，不影响已配置正确的模块。
+
 ---
 
 ## 十一、外部工具参考
 
 本项目覆盖了核心生产流程，以下外部工具可配合使用:
 
-### 视频制作(提升画面质量)
+### 视频素材与制作
 
 | 工具 | 用途 | 价格 |
 |------|------|------|
-| 剪映桌面版 | 视频剪辑+TTS+模板，质量最好 | 免费 |
+| Pexels | 高质量免费视频素材(本项目 video 模式已集成) | 免费 API |
+| Pixabay | 免费视频/图片素材 | 免费 |
+| Mixkit | 免费视频素材 | 免费 |
+| 剪映桌面版 | 视频剪辑+TTS+模板，手动制作质量最好 | 免费 |
 | 腾讯智影 | 数字人出镜 | 有免费额度 |
 | 硅基流动 | 数字人API | 有免费额度 |
-| 通义万相/可灵 | AI生成配图 | 有免费额度 |
 
 ### 多平台分发
 
@@ -706,22 +829,23 @@ DIGITAL_HUMAN_ENGINE = "sadtalker"  # 数字人
                             │
                ┌────────────▼────────────┐
                │  generate_script.py     │
-               │  AI 规划5个选题          │
-               │  逐集生成文案            │
+               │  AI 规划5个蒸馏角度      │
+               │  逐集生成高密度文案      │
                └────────────┬────────────┘
                             │
                 ┌───────────▼───────────┐
-                │  每集独立处理:         │
+                │  每集独立处理(90s):    │
                 │                       │
                 │  generate_voice.py    │
                 │  语音(Edge TTS        │
                 │   或声音克隆)         │
                 │         |             │
-                │  digital_human.py     │
-                │  (可选) 数字人口播     │
-                │     或                │
-                │  generate_images.py   │
-                │  画面帧(5套配色)       │
+                │  画面(按 VIDEO_BG_MODE │
+                │  自动选择):           │
+                │  ├ video: bg_video.py │
+                │  │ 应景视频+暗层+大字幕│
+                │  ├ cards: 卡片画面    │
+                │  └ digital_human: 口播│
                 │         |             │
                 │  bgm_matcher.py       │
                 │  智能匹配BGM          │

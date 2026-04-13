@@ -4,6 +4,7 @@
 """
 
 import os
+import re
 from pathlib import Path
 
 # ============ 项目路径 ============
@@ -32,8 +33,14 @@ def get_book_output_dir(book_title: str) -> Path:
         ├── frames/
         └── video.mp4
     """
-    safe_title = book_title.replace(" ", "_").replace("/", "_").replace("\\", "_")
-    book_dir = OUTPUT_DIR / safe_title
+    # 移除危险字符，防止路径遍历
+    safe_title = re.sub(r'[\\/:*?"<>|.\s]', '_', book_title).strip('_')
+    if not safe_title:
+        safe_title = "untitled"
+    book_dir = (OUTPUT_DIR / safe_title).resolve()
+    # 确保路径在 OUTPUT_DIR 内，防止路径遍历攻击
+    if not str(book_dir).startswith(str(OUTPUT_DIR.resolve())):
+        raise ValueError(f"非法书名导致路径逃逸: {book_title}")
     book_dir.mkdir(parents=True, exist_ok=True)
     return book_dir
 
@@ -52,19 +59,33 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6-20250514")
 
 # ============ TTS 语音合成配置 ============
 # 支持: "edge" | "azure" | "offline" | "clone" (声音克隆)
-TTS_PROVIDER = "edge"
+TTS_PROVIDER = "clone"
 
 # ---- 声音克隆配置(TTS_PROVIDER = "clone" 时生效) ----
 # 克隆方案: "gpt_sovits" | "fish_audio"
 VOICE_CLONE_ENGINE = "gpt_sovits"
 
 # GPT-SoVITS 配置(本地部署)
-# 部署文档: https://github.com/RVC-Boss/GPT-SoVITS
+# 指定当前使用的语音样本文件夹名称 (assets/voice_sample/ 下的子目录名)
+VOICE_SAMPLE_NAME = os.getenv("VOICE_SAMPLE_NAME", "default")
+
 GPT_SOVITS_API_URL = os.getenv("GPT_SOVITS_API_URL", "http://127.0.0.1:9880")
-# 参考音频路径(你录的10-30秒人声样本)
-GPT_SOVITS_REF_AUDIO = os.getenv("GPT_SOVITS_REF_AUDIO", str(ASSETS_DIR / "voice_sample" / "sample.wav"))
-# 参考音频对应的文字(说了什么内容)
-GPT_SOVITS_REF_TEXT = os.getenv("GPT_SOVITS_REF_TEXT", "")
+# 动态构建参考音频和文字的路径
+GPT_SOVITS_REF_DIR = ASSETS_DIR / "voice_sample" / VOICE_SAMPLE_NAME
+GPT_SOVITS_REF_AUDIO = str(GPT_SOVITS_REF_DIR / "sample.wav")
+GPT_SOVITS_REF_TEXT_FILE = GPT_SOVITS_REF_DIR / "text.txt"
+
+# 动态读取参考文字内容
+def get_gpt_sovits_ref_text():
+    if GPT_SOVITS_REF_TEXT_FILE.exists():
+        try:
+            return GPT_SOVITS_REF_TEXT_FILE.read_text(encoding="utf-8").strip()
+        except Exception:
+            return ""
+    # 兜底旧配置内容
+    return "很多人问我，为什么要读这么多书？其实读书不是为了记住每一个字，而是为了在某个瞬间，能用前人的智慧来对抗生活的平庸。今天我们要拆解的这本书叫《认知觉醒》。作者提到一个核心观点：人与人之间的根本差异，并不在于努力程度，而是在于思维模型。"
+
+GPT_SOVITS_REF_TEXT = get_gpt_sovits_ref_text()
 
 # Fish Audio 配置(在线API)
 # 注册: https://fish.audio
@@ -129,6 +150,34 @@ VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920  # 竖屏 9:16
 VIDEO_FPS = 30
 VIDEO_BG_COLOR = (18, 18, 18)  # 深色背景
+
+# ---- 画面模式 ----
+# "cards"  — Pillow 生成的卡片画面(默认，无需外部资源)
+# "video"  — 应景视频素材 + 大字幕(最主流的知识类风格)
+# "digital_human" — 数字人口播(需要 DIGITAL_HUMAN_ENGINE)
+VIDEO_BG_MODE = "video"
+
+# ---- 视频素材配置(VIDEO_BG_MODE = "video" 时生效) ----
+# 素材来源优先级: 本地目录 → Pexels API 在线搜索
+BG_VIDEOS_DIR = ASSETS_DIR / "bg_videos"
+
+# Pexels API（免费，高质量视频素材，注册即获 Key）
+# 注册: https://www.pexels.com/api/
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
+
+# 视频素材搜索关键词映射(书籍分类 → 搜索关键词)
+# Pexels 用英文搜索效果最好
+BG_VIDEO_KEYWORDS = {
+    "心理学": ["meditation", "thinking", "peaceful nature"],
+    "自我成长": ["sunrise", "running", "mountain climbing"],
+    "商业": ["city skyline", "office", "business"],
+    "沟通": ["people talking", "coffee meeting", "conversation"],
+    "历史": ["ancient architecture", "old books", "museum"],
+    "哲学": ["stars", "ocean waves", "foggy forest"],
+    "科学": ["space", "laboratory", "technology"],
+    "文学": ["rain window", "autumn leaves", "old library"],
+    "default": ["book reading", "coffee", "nature calm", "city night"],
+}
 
 # 字幕样式
 SUBTITLE_FONT_SIZE = 48
@@ -204,25 +253,31 @@ BOOK_TARGET_CATEGORIES = [
 # 每本书生成多少集视频（每集一个独立选题/角度）
 EPISODES_PER_BOOK = 5
 
+# 默认视频时长（秒）
+# 书籍蒸馏定位：90秒 = 高信息密度单点蒸馏，兼顾完播率
+DEFAULT_DURATION = 90
+
 # ============ 文案 Prompt 模板 ============
 
 # 选题规划 Prompt: 让 AI 为一本书规划多个视频选题
-TOPIC_PLAN_PROMPT = """请为《{book_title}》这本书规划 {episode_count} 个抖音短视频选题。
+TOPIC_PLAN_PROMPT = """你是"书籍蒸馏"账号的内容策划师。我们的定位是：把一整本书蒸馏成几分钟的精华，帮观众用最短时间吸收一本书最有价值的部分。
+
+请为《{book_title}》这本书规划 {episode_count} 个抖音短视频选题。
 
 书籍简介: {book_desc}
 
 要求:
 1. 每个选题要有独立的切入角度，不能重复
-2. 选题要有话题性，能引起好奇心和讨论
+2. 选题要有"蒸馏感"——把厚重内容提炼成一个锐利的点
 3. 覆盖书中不同的精华内容，不要集中在一个点上
 4. 选题类型可以多样化，比如:
-   - 核心观点解读（书中最颠覆认知的1个观点）
-   - 金句合集（书中最扎心的几句话）
-   - 实用方法论（书中可以直接用的方法/技巧）
-   - 故事/案例（书中最有趣的故事或案例）
-   - 反常识观点（书中违反直觉的观点）
-   - 一句话总结（用一句话说清这本书讲了什么）
-   - 对比型（读这本书前 vs 后的区别）
+   - 核心蒸馏（这本书最值钱的1个观点）
+   - 金句蒸馏（书中最扎心的几句话）
+   - 方法蒸馏（书中可以直接用的方法/技巧）
+   - 故事蒸馏（书中最有趣的故事或案例）
+   - 反常识蒸馏（书中违反直觉的观点）
+   - 一句话蒸馏（一句话说清这本书讲了什么）
+   - 对比型（读这本书前 vs 后的认知差距）
    - 问题解答型（你有没有XXX困惑？这本书给出了答案）
 
 请严格按以下 JSON 格式返回（不要返回其他任何内容）:
@@ -231,13 +286,15 @@ TOPIC_PLAN_PROMPT = """请为《{book_title}》这本书规划 {episode_count} �
     "episode": 1,
     "title": "视频标题（用于抖音发布，要有吸引力，15字以内）",
     "angle": "切入角度的简短描述",
-    "type": "选题类型（如: 核心观点/金句/方法论/故事/反常识等）",
+    "type": "选题类型（如: 核心蒸馏/金句蒸馏/方法蒸馏/故事蒸馏/反常识蒸馏等）",
     "key_points": "这集要讲的核心内容（50字以内）"
   }}
 ]"""
 
 # 单集文案 Prompt
-SCRIPT_PROMPT_TEMPLATE = """请帮我为《{book_title}》这本书写一段{duration}秒的抖音短视频文案。
+SCRIPT_PROMPT_TEMPLATE = """你是"书籍蒸馏"账号的文案创作者。我们的风格是：用最精炼的语言把一本书的精华蒸馏出来，让观众几分钟就能吸收一本书最有价值的部分。
+
+请帮我为《{book_title}》这本书写一段{duration}秒的抖音短视频文案。
 
 书籍简介: {book_desc}
 
@@ -249,9 +306,60 @@ SCRIPT_PROMPT_TEMPLATE = """请帮我为《{book_title}》这本书写一段{dur
 要求:
 1. 开头3秒要有强烈的钩子（引起好奇心，可以用反问/悬念/颠覆认知的方式）
 2. 紧扣本集选题展开，不要泛泛而谈
-3. 结尾有金句总结 + 引导关注（如"关注我，每天带你读一本好书"）
-4. 口语化，像在跟朋友聊天，避免书面语
-5. 总字数控制在{word_count}字左右（按照每秒4个字的语速）
+3. 结尾有强有力的金句总结
+4. 口语化，像在跟朋友聊天，避免书面语5. 总字数控制在{word_count}字左右（按照每秒4个字的语速）
 6. 不要出现"大家好"等开场白，直接进入主题
+7. 体现"蒸馏"感：信息密度高，每句话都有干货，没有废话
 
 请只输出文案正文，不要输出标题或其他说明。"""
+
+
+# ============ 启动配置校验 ============
+
+def validate_config() -> list[str]:
+    """
+    校验关键配置项，返回警告信息列表。
+    在 main.py 启动时调用，提前发现配置问题。
+    """
+    warnings = []
+
+    # LLM API Key 校验
+    if LLM_PROVIDER == "openai" and OPENAI_API_KEY in ("your-api-key-here", ""):
+        warnings.append("OPENAI_API_KEY 未配置，文案生成将失败。请设置环境变量或编辑 config.py")
+    if LLM_PROVIDER == "claude" and CLAUDE_API_KEY in ("your-claude-api-key-here", ""):
+        warnings.append("CLAUDE_API_KEY 未配置，文案生成将失败。请设置环境变量或编辑 config.py")
+
+    # TTS 配置校验
+    if TTS_PROVIDER == "azure" and not AZURE_TTS_KEY:
+        warnings.append("TTS_PROVIDER='azure' 但 AZURE_TTS_KEY 未配置，将无法生成语音")
+    if TTS_PROVIDER == "clone":
+        if VOICE_CLONE_ENGINE == "fish_audio" and (not FISH_AUDIO_API_KEY or not FISH_AUDIO_MODEL_ID):
+            warnings.append("声音克隆使用 fish_audio 但 API Key 或 Model ID 未配置")
+        if VOICE_CLONE_ENGINE == "gpt_sovits" and not Path(GPT_SOVITS_REF_AUDIO).exists():
+            warnings.append(f"GPT-SoVITS 参考音频不存在: {GPT_SOVITS_REF_AUDIO}")
+
+    # Edge TTS 风格强度范围
+    if not (0.01 <= EDGE_TTS_STYLE_DEGREE <= 2.0):
+        warnings.append(f"EDGE_TTS_STYLE_DEGREE={EDGE_TTS_STYLE_DEGREE} 超出范围(0.01-2.0)")
+
+    # BGM 配置校验
+    if BGM_SOURCE == "download" and not PIXABAY_API_KEY and not FREESOUND_API_KEY:
+        warnings.append("BGM_SOURCE='download' 但 PIXABAY_API_KEY 和 FREESOUND_API_KEY 均未配置")
+
+    # 视频背景模式校验
+    if VIDEO_BG_MODE == "video":
+        has_local = BG_VIDEOS_DIR.exists() and any(BG_VIDEOS_DIR.rglob("*.mp4"))
+        if not has_local and not PEXELS_API_KEY:
+            warnings.append(
+                "VIDEO_BG_MODE='video' 但无本地素材且 PEXELS_API_KEY 未配置。"
+                "将降级为卡片模式。配置方法: https://www.pexels.com/api/ 免费注册"
+            )
+    if VIDEO_BG_MODE == "digital_human" and not DIGITAL_HUMAN_ENGINE:
+        warnings.append("VIDEO_BG_MODE='digital_human' 但 DIGITAL_HUMAN_ENGINE 未配置")
+
+    # FFmpeg 校验
+    import shutil
+    if not shutil.which("ffmpeg"):
+        warnings.append("FFmpeg 未找到，视频合成将失败。请安装 FFmpeg 并加入 PATH")
+
+    return warnings

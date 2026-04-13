@@ -27,6 +27,7 @@ from config import (
     VIDEO_WIDTH,
     VIDEO_HEIGHT,
     VIDEO_FPS,
+    VIDEO_BG_MODE,
     SUBTITLE_FONT_SIZE,
     SUBTITLE_FONT_COLOR,
     SUBTITLE_STROKE_COLOR,
@@ -168,6 +169,8 @@ def generate_video(
         script: 文案文本
     """
     voice_path = Path(voice_path)
+    if not voice_path.exists():
+        raise FileNotFoundError(f"语音文件不存在: {voice_path}")
     font = find_font()
     category = book.get("category", "") if book else ""
 
@@ -175,114 +178,152 @@ def generate_video(
     voice_clip = AudioFileClip(str(voice_path))
     duration = voice_clip.duration
 
-    # 2. 尝试数字人视频（如果已启用）
+    # 跟踪所有需要释放的资源
+    clips_to_close = [voice_clip]
+    video = None
+
     try:
-        from digital_human import is_enabled as dh_enabled, generate_talking_video
-        if dh_enabled():
-            print("  正在生成数字人视频...")
-            dh_video = generate_talking_video(
-                audio_path=voice_path,
-                output_path=voice_path.parent / "talking_head.mp4",
-            )
-            if dh_video and dh_video.exists():
-                from moviepy import VideoFileClip, ColorClip
-                dh_clip = VideoFileClip(str(dh_video)).resized((VIDEO_WIDTH, VIDEO_HEIGHT))
-                if dh_clip.duration >= duration:
-                    dh_clip = dh_clip.subclipped(0, duration)
-                elif dh_clip.duration < duration:
-                    # 数字人视频比语音短，用最后一帧填充剩余时间
-                    pad = ColorClip(
-                        size=(VIDEO_WIDTH, VIDEO_HEIGHT),
-                        color=(18, 18, 18),
-                        duration=duration - dh_clip.duration,
+        # 2. 根据 VIDEO_BG_MODE 选择画面方案
+        _bg_ready = False
+
+        # 方案A: 数字人
+        if VIDEO_BG_MODE == "digital_human":
+            try:
+                from digital_human import is_enabled as dh_enabled, generate_talking_video
+                if dh_enabled():
+                    print("  正在生成数字人视频...")
+                    dh_video = generate_talking_video(
+                        audio_path=voice_path,
+                        output_path=voice_path.parent / "talking_head.mp4",
                     )
-                    dh_clip = concatenate_videoclips([dh_clip, pad])
-                bg_video = dh_clip
-                frame_paths = []
-                layers = [bg_video]
-                print("  数字人视频已生成，使用数字人画面")
-                _use_digital_human = True
-            else:
-                _use_digital_human = False
-        else:
-            _use_digital_human = False
-    except ImportError:
-        _use_digital_human = False
+                    if dh_video and dh_video.exists():
+                        from moviepy import VideoFileClip, ColorClip
+                        dh_clip = VideoFileClip(str(dh_video)).resized((VIDEO_WIDTH, VIDEO_HEIGHT))
+                        clips_to_close.append(dh_clip)
+                        if dh_clip.duration >= duration:
+                            dh_clip = dh_clip.subclipped(0, duration)
+                        elif dh_clip.duration < duration:
+                            pad = ColorClip(
+                                size=(VIDEO_WIDTH, VIDEO_HEIGHT),
+                                color=(18, 18, 18),
+                                duration=duration - dh_clip.duration,
+                            )
+                            dh_clip = concatenate_videoclips([dh_clip, pad])
+                        layers = [dh_clip]
+                        print("  数字人视频已生成，使用数字人画面")
+                        _bg_ready = True
+            except ImportError:
+                print("  数字人模块不可用，降级为其他模式")
 
-    # 3. 卡片画面（数字人未启用或生成失败时使用）
-    if not _use_digital_human:
-        frame_paths = _generate_frames(book_title, book_author, category, script, voice_path.parent)
-        bg_video = _build_frame_sequence(frame_paths, duration)
-        layers = [bg_video]
-
-    # 4. 添加字幕层
-    if subtitle_path:
-        subtitle_path = Path(subtitle_path)
-        if subtitle_path.exists():
-            raw_subs = parse_srt(subtitle_path)
-            subs = group_subtitles(raw_subs, max_chars=15)
-
-            for sub in subs:
-                sub_clip = (
-                    TextClip(
-                        text=sub["text"],
-                        font_size=SUBTITLE_FONT_SIZE,
-                        color=SUBTITLE_FONT_COLOR,
-                        font=font,
-                        stroke_color=SUBTITLE_STROKE_COLOR,
-                        stroke_width=SUBTITLE_STROKE_WIDTH,
-                        size=(VIDEO_WIDTH - 120, None),
-                        method="caption",
-                        text_align="center",
-                    )
-                    .with_start(sub["start"])
-                    .with_end(sub["end"])
-                    .with_position(("center", int(VIDEO_HEIGHT * 0.65)))
+        # 方案B: 应景视频素材 + 大字幕（最主流知识类风格）
+        if not _bg_ready and VIDEO_BG_MODE in ("video", "digital_human"):
+            bg_clip = _build_video_background(category, duration, voice_path.parent)
+            if bg_clip is not None:
+                clips_to_close.append(bg_clip)
+                # 添加半透明暗层，让字幕更清晰
+                from moviepy import ColorClip
+                dark_overlay = (
+                    ColorClip(size=(VIDEO_WIDTH, VIDEO_HEIGHT), color=(0, 0, 0))
+                    .with_duration(duration)
+                    .with_opacity(0.35)
                 )
-                layers.append(sub_clip)
+                layers = [bg_clip, dark_overlay]
+                print("  使用视频素材背景")
+                _bg_ready = True
 
-    # 5. 合成视频
-    video = CompositeVideoClip(layers, size=(VIDEO_WIDTH, VIDEO_HEIGHT))
+        # 方案C: 卡片画面（兜底）
+        if not _bg_ready:
+            frame_paths = _generate_frames(book_title, book_author, category, script, voice_path.parent)
+            bg_video = _build_frame_sequence(frame_paths, duration)
+            layers = [bg_video]
 
-    # 6. 音频混合（语音 + BGM）
-    audio_tracks = [voice_clip]
+        # 4. 添加字幕层
+        if subtitle_path:
+            subtitle_path = Path(subtitle_path)
+            if subtitle_path.exists():
+                raw_subs = parse_srt(subtitle_path)
+                # 视频背景模式下字幕更大、每行更多字(因为是主要阅读内容)
+                is_video_bg = _bg_ready and VIDEO_BG_MODE == "video"
+                max_chars = 12 if is_video_bg else 15
+                subs = group_subtitles(raw_subs, max_chars=max_chars)
 
-    if bgm_path is None:
-        bgm_path = find_bgm(book=book, script=script)
+                # 视频背景模式：字幕更大更醒目，居中偏下
+                sub_font_size = int(SUBTITLE_FONT_SIZE * 1.3) if is_video_bg else SUBTITLE_FONT_SIZE
+                sub_stroke_width = SUBTITLE_STROKE_WIDTH + 1 if is_video_bg else SUBTITLE_STROKE_WIDTH
+                sub_y_pos = int(VIDEO_HEIGHT * 0.55) if is_video_bg else int(VIDEO_HEIGHT * 0.65)
 
-    if bgm_path and Path(bgm_path).exists():
-        bgm_clip = AudioFileClip(str(bgm_path))
-        if bgm_clip.duration < duration:
-            loops = int(duration / bgm_clip.duration) + 1
-            bgm_clip = concatenate_audioclips([bgm_clip] * loops).subclipped(0, duration)
-        else:
-            bgm_clip = bgm_clip.subclipped(0, duration)
+                for sub in subs:
+                    sub_clip = (
+                        TextClip(
+                            text=sub["text"],
+                            font_size=sub_font_size,
+                            color=SUBTITLE_FONT_COLOR,
+                            font=font,
+                            stroke_color=SUBTITLE_STROKE_COLOR,
+                            stroke_width=sub_stroke_width,
+                            size=(VIDEO_WIDTH - 120, None),
+                            method="caption",
+                            text_align="center",
+                        )
+                        .with_start(sub["start"])
+                        .with_end(sub["end"])
+                        .with_position(("center", sub_y_pos))
+                    )
+                    layers.append(sub_clip)
 
-        bgm_clip = bgm_clip.with_volume_scaled(bgm_volume)
-        bgm_clip = bgm_clip.audio_fadein(2).audio_fadeout(3)
-        audio_tracks.append(bgm_clip)
+        # 5. 合成视频
+        video = CompositeVideoClip(layers, size=(VIDEO_WIDTH, VIDEO_HEIGHT))
 
-    final_audio = CompositeAudioClip(audio_tracks)
-    video = video.with_audio(final_audio)
+        # 6. 音频混合（语音 + BGM）
+        audio_tracks = [voice_clip]
 
-    # 7. 导出（保存到语音文件所在目录，即当前集的目录）
-    output_dir = voice_path.parent
-    output_path = output_dir / "video.mp4"
+        if bgm_path is None:
+            bgm_path = find_bgm(book=book, script=script)
 
-    video.write_videofile(
-        str(output_path),
-        fps=VIDEO_FPS,
-        codec="libx264",
-        audio_codec="aac",
-        threads=4,
-        preset="medium",
-        logger="bar",
-    )
+        if bgm_path and Path(bgm_path).exists():
+            bgm_clip = AudioFileClip(str(bgm_path))
+            clips_to_close.append(bgm_clip)
+            if bgm_clip.duration < duration:
+                loops = int(duration / bgm_clip.duration) + 1
+                bgm_clip = concatenate_audioclips([bgm_clip] * loops).subclipped(0, duration)
+            else:
+                bgm_clip = bgm_clip.subclipped(0, duration)
 
-    voice_clip.close()
-    video.close()
+            bgm_clip = bgm_clip.with_volume_scaled(bgm_volume)
+            bgm_clip = bgm_clip.audio_fadein(2).audio_fadeout(3)
+            audio_tracks.append(bgm_clip)
 
-    return output_path
+        final_audio = CompositeAudioClip(audio_tracks)
+        video = video.with_audio(final_audio)
+
+        # 7. 导出（保存到语音文件所在目录，即当前集的目录）
+        output_dir = voice_path.parent
+        output_path = output_dir / "video.mp4"
+
+        video.write_videofile(
+            str(output_path),
+            fps=VIDEO_FPS,
+            codec="libx264",
+            audio_codec="aac",
+            threads=4,
+            preset="medium",
+            logger="bar",
+        )
+
+        return output_path
+
+    finally:
+        # 确保所有资源都被释放，即使发生异常
+        for clip in clips_to_close:
+            try:
+                clip.close()
+            except Exception:
+                pass
+        if video is not None:
+            try:
+                video.close()
+            except Exception:
+                pass
 
 
 def _generate_frames(
@@ -369,6 +410,97 @@ def _build_frame_sequence(
         video = video.subclipped(0, total_duration)
 
     return video
+
+
+def _build_video_background(
+    category: str,
+    total_duration: float,
+    cache_dir: Path = None,
+) -> CompositeVideoClip | None:
+    """
+    构建视频素材背景
+
+    从本地或 Pexels 获取视频素材，拼接/循环到指定时长，
+    裁剪为竖屏 9:16。
+    """
+    try:
+        from bg_video import get_bg_videos
+    except ImportError:
+        print("  bg_video 模块不可用")
+        return None
+
+    from moviepy import VideoFileClip, ColorClip
+
+    video_paths = get_bg_videos(
+        category=category,
+        count=5,
+        cache_dir=cache_dir / "bg_cache" if cache_dir else None,
+    )
+
+    if not video_paths:
+        return None
+
+    clips = []
+    accumulated = 0.0
+
+    for vpath in video_paths:
+        if accumulated >= total_duration:
+            break
+        try:
+            clip = VideoFileClip(str(vpath))
+            # 裁剪为竖屏 9:16（居中裁剪）
+            clip = _crop_to_portrait(clip)
+            clip = clip.resized((VIDEO_WIDTH, VIDEO_HEIGHT))
+            clips.append(clip)
+            accumulated += clip.duration
+        except Exception as e:
+            print(f"  [素材] 加载失败 {vpath.name}: {e}")
+            continue
+
+    if not clips:
+        return None
+
+    # 如果素材不够长，循环拼接
+    if accumulated < total_duration:
+        while accumulated < total_duration:
+            for clip in list(clips):
+                if accumulated >= total_duration:
+                    break
+                clips.append(clip)
+                accumulated += clip.duration
+
+    # 拼接所有素材
+    from moviepy import concatenate_videoclips
+    combined = concatenate_videoclips(clips, method="compose")
+
+    # 裁剪到精确时长
+    if combined.duration > total_duration:
+        combined = combined.subclipped(0, total_duration)
+
+    return combined
+
+
+def _crop_to_portrait(clip):
+    """将视频裁剪为竖屏 9:16（居中裁剪）"""
+    w, h = clip.size
+    target_ratio = 9 / 16  # 竖屏
+
+    current_ratio = w / h
+    if abs(current_ratio - target_ratio) < 0.05:
+        return clip  # 已经接近竖屏
+
+    if current_ratio > target_ratio:
+        # 视频太宽(横屏)，裁掉两边
+        new_w = int(h * target_ratio)
+        x_center = w // 2
+        x1 = x_center - new_w // 2
+        return clip.cropped(x1=x1, x2=x1 + new_w)
+    else:
+        # 视频太高，裁掉上下
+        new_h = int(w / target_ratio)
+        y_center = h // 2
+        y1 = y_center - new_h // 2
+        return clip.cropped(y1=y1, y2=y1 + new_h)
 
 
 # ============ 命令行入口 ============

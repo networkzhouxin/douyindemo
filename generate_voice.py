@@ -106,16 +106,23 @@ def _build_ssml(text: str, voice: str = None) -> str:
     # 添加智能停顿
     text_with_pauses = _add_smart_pauses(text)
 
-    # 转义 XML 特殊字符（但保留已插入的 SSML 标签）
-    # 先保护 break 标签
-    text_with_pauses = text_with_pauses.replace("<break", "{{BREAK")
-    text_with_pauses = text_with_pauses.replace("/>", "ENDBREAK}}")
-    # 转义
+    # 转义 XML 特殊字符（但保留已插入的 SSML break 标签）
+    # 先用占位符保护 break 标签
+    import uuid
+    placeholder = f"__BREAK_{uuid.uuid4().hex[:8]}__"
+    # 匹配完整的 <break time="..."/> 标签
+    break_tags = re.findall(r'<break\s+time="[^"]*"\s*/>', text_with_pauses)
+    for i, tag in enumerate(break_tags):
+        text_with_pauses = text_with_pauses.replace(tag, f"{placeholder}{i}{placeholder}", 1)
+    # 转义所有 XML 特殊字符
     text_with_pauses = text_with_pauses.replace("&", "&amp;")
+    text_with_pauses = text_with_pauses.replace("<", "&lt;")
+    text_with_pauses = text_with_pauses.replace(">", "&gt;")
     text_with_pauses = text_with_pauses.replace('"', "&quot;")
+    text_with_pauses = text_with_pauses.replace("'", "&apos;")
     # 恢复 break 标签
-    text_with_pauses = text_with_pauses.replace("{{BREAK", "<break")
-    text_with_pauses = text_with_pauses.replace("ENDBREAK}}", "/>")
+    for i, tag in enumerate(break_tags):
+        text_with_pauses = text_with_pauses.replace(f"{placeholder}{i}{placeholder}", tag)
 
     # 构建 prosody 属性
     prosody_attrs = []
@@ -254,14 +261,18 @@ async def generate_voice_edge_with_subtitles(
                     srt_content.append(f"{idx}\n{start_time} --> {end_time}\n{word}\n")
                     idx += 1
 
-            # 保存音频
-            with open(output_path, "wb") as f:
+            # 保存音频（原子写入：先写临时文件再重命名）
+            tmp_audio = output_path.with_suffix(".tmp")
+            with open(tmp_audio, "wb") as f:
                 for chunk in audio_chunks:
                     f.write(chunk)
+            tmp_audio.replace(output_path)
 
-            # 保存字幕
-            with open(subtitle_path, "w", encoding="utf-8") as f:
+            # 保存字幕（原子写入）
+            tmp_srt = subtitle_path.with_suffix(".tmp")
+            with open(tmp_srt, "w", encoding="utf-8") as f:
                 f.write("\n".join(srt_content))
+            tmp_srt.replace(subtitle_path)
 
             return  # 成功
         except Exception as e:
@@ -350,10 +361,40 @@ def generate_voice_gpt_sovits(text: str, output_path: Path):
         with urllib.request.urlopen(req, timeout=120) as resp:
             audio_data = resp.read()
 
-        with open(output_path, "wb") as f:
+        # 1. 先保存原始音频
+        raw_path = output_path.with_suffix(".raw.wav")
+        with open(raw_path, "wb") as f:
             f.write(audio_data)
 
-        print(f"  [GPT-SoVITS] 声音克隆完成")
+        # 2. 使用 FFmpeg 自动切除末尾和开头的静音 (静音阈值 -50dB，持续 0.5s 以上视为静音)
+        # silenceremove=start_periods=1:start_threshold=-50dB:stop_periods=-1:stop_duration=0.5:stop_threshold=-50dB
+        import subprocess
+        import shutil
+
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-i", str(raw_path),
+            "-af", "silenceremove=start_periods=1:start_threshold=-50dB:stop_periods=-1:stop_duration=0.5:stop_threshold=-50dB",
+            str(output_path)
+        ]
+        
+        # 检查 ffmpeg 是否可用
+        if shutil.which("ffmpeg"):
+            result = subprocess.run(ffmpeg_cmd, capture_output=True)
+            if result.returncode != 0:
+                err_msg = result.stderr.decode("utf-8", errors="replace")
+                print(f"  [警告] FFmpeg 切除静音失败: {err_msg}")
+                # 失败则回退到原始音频
+                shutil.copy(raw_path, output_path)
+        else:
+            # 没有 ffmpeg 则直接重命名
+            raw_path.replace(output_path)
+
+        # 清理临时文件
+        if raw_path.exists():
+            raw_path.unlink()
+
+        print(f"  [GPT-SoVITS] 声音克隆完成 (已自动切除末尾静音)")
     except Exception as e:
         raise RuntimeError(
             f"GPT-SoVITS 调用失败: {e}\n"
@@ -401,8 +442,11 @@ def generate_voice_fish_audio(text: str, output_path: Path):
         with urllib.request.urlopen(req, timeout=120) as resp:
             audio_data = resp.read()
 
-        with open(output_path, "wb") as f:
+        # 原子写入
+        tmp_path = output_path.with_suffix(".tmp")
+        with open(tmp_path, "wb") as f:
             f.write(audio_data)
+        tmp_path.replace(output_path)
 
         print(f"  [Fish Audio] 声音克隆完成")
     except Exception as e:
@@ -443,7 +487,10 @@ def generate_voice_offline(text: str, output_path: Path):
     # 先保存为 wav，如果需要 mp3 再转换
     wav_path = output_path.with_suffix(".wav")
     engine.save_to_file(text, str(wav_path))
-    engine.runAndWait()
+    try:
+        engine.runAndWait()
+    except Exception as e:
+        raise RuntimeError(f"离线 TTS 引擎执行失败: {e}") from e
 
     # 如果需要 mp3 格式，尝试用 ffmpeg 转换
     if output_path.suffix.lower() == ".mp3":
@@ -596,7 +643,12 @@ def list_available_voices():
         return cn_voices
 
     _setup_proxy()
-    return asyncio.run(_list())
+    try:
+        return asyncio.run(_list())
+    except Exception as e:
+        print(f"  获取语音列表失败: {e}")
+        print(f"  可能是网络问题，请检查代理设置或网络连接")
+        return []
 
 
 # ============ 命令行入口 ============

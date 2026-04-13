@@ -165,7 +165,7 @@ def analyze_mood_with_ai(script: str) -> str:
 
 def _analyze_with_openai(prompt: str) -> str:
     from openai import OpenAI
-    client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+    client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL, timeout=30)
     response = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[{"role": "user", "content": prompt}],
@@ -177,7 +177,7 @@ def _analyze_with_openai(prompt: str) -> str:
 
 def _analyze_with_claude(prompt: str) -> str:
     import anthropic
-    client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+    client = anthropic.Anthropic(api_key=CLAUDE_API_KEY, timeout=30)
     response = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=10,
@@ -203,7 +203,7 @@ def match_bgm_by_ai(script: str) -> tuple[Path | None, str]:
 # 方案 3：Suno AI 生成原创 BGM
 # ============================================================
 
-SUNO_MUSIC_PROMPT_TEMPLATE = """为一个读书类短视频生成背景音乐。
+SUNO_MUSIC_PROMPT_TEMPLATE = """为一个"书籍蒸馏"类短视频生成背景音乐。
 
 书名：《{book_title}》
 分类：{category}
@@ -310,8 +310,8 @@ def match_bgm(
         # 自动模式：AI分析 → 规则匹配 → 自动下载
         mood = None
         has_api_key = (
-            OPENAI_API_KEY != "your-api-key-here"
-            or CLAUDE_API_KEY != "your-claude-api-key-here"
+            (OPENAI_API_KEY and OPENAI_API_KEY not in ("your-api-key-here", ""))
+            or (CLAUDE_API_KEY and CLAUDE_API_KEY not in ("your-claude-api-key-here", ""))
         )
 
         # Step 1: 尝试 AI 情绪分析
@@ -428,10 +428,14 @@ if __name__ == "__main__":
 
         if args.book or args.category:
             if args.book:
-                books = json.loads(
-                    (Path(__file__).parent / "book_list.json").read_text(encoding="utf-8")
-                )
-                book_info = next((b for b in books if b["title"] == args.book), None)
+                book_list_path = Path(__file__).parent / "book_list.json"
+                book_info = None
+                if book_list_path.exists():
+                    try:
+                        books = json.loads(book_list_path.read_text(encoding="utf-8"))
+                        book_info = next((b for b in books if b["title"] == args.book), None)
+                    except (json.JSONDecodeError, OSError) as e:
+                        print(f"  书单文件读取失败: {e}")
                 if not book_info:
                     book_info = {"title": args.book, "category": args.category or ""}
             else:
@@ -447,10 +451,14 @@ if __name__ == "__main__":
             print("\n未找到匹配的 BGM 文件，请先添加音乐到 assets/bgm/ 目录")
 
     elif args.command == "suno":
-        books = json.loads(
-            (Path(__file__).parent / "book_list.json").read_text(encoding="utf-8")
-        )
-        book_info = next((b for b in books if b["title"] == args.book), None)
+        book_list_path = Path(__file__).parent / "book_list.json"
+        book_info = None
+        if book_list_path.exists():
+            try:
+                books = json.loads(book_list_path.read_text(encoding="utf-8"))
+                book_info = next((b for b in books if b["title"] == args.book), None)
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"  书单文件读取失败: {e}")
         if book_info:
             generate_bgm_with_suno(book_info)
         else:

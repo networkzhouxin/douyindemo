@@ -129,11 +129,16 @@ def _generate_sadtalker(
             return None
 
         # SadTalker 输出到 result_dir 下，找到生成的视频
-        generated = list(output_path.parent.glob("*.mp4"))
+        # 只查找本次生成的新文件（排除已有的 output_path）
+        generated = [
+            p for p in output_path.parent.glob("*.mp4")
+            if p != output_path and p.name != "video.mp4"
+        ]
         if generated:
             latest = max(generated, key=lambda p: p.stat().st_mtime)
-            if latest != output_path:
-                latest.rename(output_path)
+            # 使用 shutil.move 确保跨文件系统也能工作，且覆盖已有文件
+            import shutil
+            shutil.move(str(latest), str(output_path))
             print(f"  [SadTalker] 数字人视频已生成: {output_path}")
             return output_path
 
@@ -207,6 +212,9 @@ def check_photo(photo_path: str | Path = None) -> dict:
     try:
         from PIL import Image
         img = Image.open(str(photo_path))
+        img.verify()  # 验证图片文件完整性
+        # verify() 后需要重新打开获取尺寸
+        img = Image.open(str(photo_path))
         w, h = img.size
 
         suggestions = []
@@ -221,6 +229,7 @@ def check_photo(photo_path: str | Path = None) -> dict:
 
         if w / h > 2 or h / w > 2:
             suggestions.append("宽高比过大，建议接近 1:1 或 3:4")
+            ok = False
 
         if not suggestions:
             suggestions.append("照片基本符合要求")

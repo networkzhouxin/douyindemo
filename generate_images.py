@@ -168,33 +168,27 @@ def add_particles(img: Image.Image, color: tuple, count: int = 30) -> Image.Imag
 
 
 def add_vignette(img: Image.Image, strength: float = 0.6) -> Image.Image:
-    """添加暗角效果，让画面更有电影质感"""
-    width, height = img.size
-    vignette = Image.new("L", (width, height), 0)
-    draw = ImageDraw.Draw(vignette)
+    """添加暗角效果，让画面更有电影质感（使用向量化计算）"""
+    import numpy as np
 
-    cx, cy = width // 2, height // 2
+    width, height = img.size
+    cx, cy = width / 2, height / 2
     max_dist = math.sqrt(cx**2 + cy**2)
 
-    for y in range(0, height, 2):
-        for x in range(0, width, 2):
-            dist = math.sqrt((x - cx)**2 + (y - cy)**2)
-            ratio = dist / max_dist
-            brightness = int(255 * (1 - ratio * strength))
-            brightness = max(0, min(255, brightness))
-            draw.rectangle([x, y, x + 1, y + 1], fill=brightness)
+    # 生成距离矩阵（向量化，避免逐像素循环）
+    y_coords = np.arange(height).reshape(-1, 1)
+    x_coords = np.arange(width).reshape(1, -1)
+    dist = np.sqrt((x_coords - cx)**2 + (y_coords - cy)**2)
+    # 计算暗角系数 (0~1)
+    vignette_mask = np.clip(1.0 - (dist / max_dist) * strength, 0.0, 1.0)
 
-    vignette = vignette.resize((width, height), Image.LANCZOS)
+    # 应用到图片
+    img_array = np.array(img.convert("RGB"), dtype=np.float32)
+    for c in range(3):
+        img_array[:, :, c] *= vignette_mask
+    img_array = np.clip(img_array, 0, 255).astype(np.uint8)
 
-    img_rgba = img.convert("RGBA")
-    result = Image.new("RGBA", (width, height))
-    for y in range(height):
-        for x in range(width):
-            r, g, b, a = img_rgba.getpixel((x, y))
-            v = vignette.getpixel((x, y)) / 255.0
-            result.putpixel((x, y), (int(r * v), int(g * v), int(b * v), a))
-
-    return result.convert("RGB")
+    return Image.fromarray(img_array, "RGB")
 
 
 def create_themed_bg(theme: dict) -> Image.Image:
@@ -283,16 +277,6 @@ def create_book_cover_card(
         f"作者:{book_author}",
         font=author_font,
         fill=theme["text_secondary"],
-        anchor="mt",
-    )
-
-    # 底部装饰标语
-    slogan_font = get_font(24)
-    draw.text(
-        (width // 2, height - 60),
-        "每天一本好书 - 遇见更好的自己",
-        font=slogan_font,
-        fill=(*theme["accent"][:3], 150),
         anchor="mt",
     )
 
@@ -510,16 +494,7 @@ def create_content_frame(
     card_x = (VIDEO_WIDTH - quote_card.width) // 2
     img_rgba.paste(quote_card, (card_x, 350), quote_card)
 
-    # 底部装饰文字
-    footer_font = get_font(24)
-    draw.text(
-        (VIDEO_WIDTH // 2, VIDEO_HEIGHT - 200),
-        "关注我 - 每天带你读一本好书",
-        font=footer_font,
-        fill=(*theme["text_secondary"][:3], 120),
-        anchor="mt",
-    )
-
+    # 底部不再添加装饰文字
     return img_rgba.convert("RGB")
 
 
@@ -563,28 +538,9 @@ def create_ending_frame(
         fill=theme["accent"],
     )
 
-    # CTA
-    cta_font = get_font(40, bold=True)
-    draw.text(
-        (VIDEO_WIDTH // 2, 760),
-        "点赞 + 关注",
-        font=cta_font,
-        fill=theme["accent"],
-        anchor="mt",
-    )
-
-    sub_font = get_font(30)
-    draw.text(
-        (VIDEO_WIDTH // 2, 830),
-        "每天带你读一本好书",
-        font=sub_font,
-        fill=theme["text_secondary"],
-        anchor="mt",
-    )
-
     # 装饰图标
     icon_font = get_font(80)
-    draw.text((VIDEO_WIDTH // 2, 1000), "📚", font=icon_font, anchor="mt")
+    draw.text((VIDEO_WIDTH // 2, 800), "📚", font=icon_font, anchor="mt")
 
     return img_rgba.convert("RGB")
 
@@ -635,12 +591,17 @@ def split_script_to_segments(script: str) -> list[str]:
     for seg in segments:
         if len(seg) > 60:
             mid = len(seg) // 2
-            # 找附近的逗号断开
-            comma_pos = seg.find("，", mid - 10)
-            if comma_pos == -1:
-                comma_pos = mid
-            final.append(seg[:comma_pos + 1].strip())
-            final.append(seg[comma_pos + 1:].strip())
+            # 在中间附近找逗号/顿号断开
+            best_pos = -1
+            for punct in ("，", ",", "、", "；"):
+                pos = seg.find(punct, max(0, mid - 15))
+                if pos != -1 and pos < mid + 15:
+                    best_pos = pos
+                    break
+            if best_pos == -1:
+                best_pos = mid  # 无标点则在中间断开
+            final.append(seg[:best_pos + 1].strip())
+            final.append(seg[best_pos + 1:].strip())
         else:
             final.append(seg)
 
@@ -678,6 +639,7 @@ def generate_all_frames(
     )
     path = output_dir / "00_opening.png"
     opening.save(str(path))
+    opening.close()  # 释放内存
     frames.append(path)
 
     # 2. 内容段落
@@ -691,12 +653,14 @@ def generate_all_frames(
         )
         path = output_dir / f"{i+1:02d}_content.png"
         content.save(str(path))
+        content.close()  # 释放内存
         frames.append(path)
 
     # 3. 片尾
     ending = create_ending_frame(book_title, theme=theme)
     path = output_dir / f"{len(segments)+1:02d}_ending.png"
     ending.save(str(path))
+    ending.close()
     frames.append(path)
 
     print(f"已生成 {len(frames)} 张画面(片头1 + 内容{len(segments)} + 片尾1)")

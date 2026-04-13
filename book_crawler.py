@@ -36,14 +36,21 @@ def load_book_list() -> list[dict]:
     path = BASE_DIR / "book_list.json"
     if not path.exists():
         return []
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  书单文件读取失败: {e}")
+        return []
 
 
 def save_book_list(books: list[dict]):
     path = BASE_DIR / "book_list.json"
-    with open(path, "w", encoding="utf-8") as f:
+    # 原子写入：先写临时文件再重命名
+    tmp_path = path.with_suffix(".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(books, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(path)
 
 
 def get_existing_titles(books: list[dict]) -> set[str]:
@@ -114,7 +121,10 @@ def fetch_douban_hot(category: str = "", count: int = 20) -> list[dict]:
     try:
         req = urllib.request.Request(search_url, headers=DOUBAN_HEADERS)
         with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
+            if resp.status != 200:
+                print(f"  [豆瓣] HTTP {resp.status}，请求失败")
+                return []
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
 
         for item in data.get("books", []):
             title = item.get("title", "").strip()
@@ -153,31 +163,31 @@ def fetch_douban_top250(start: int = 0, count: int = 25) -> list[dict]:
     try:
         req = urllib.request.Request(url, headers=DOUBAN_HEADERS)
         with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode()
+            if resp.status != 200:
+                print(f"  [豆瓣Top250] HTTP {resp.status}，请求失败")
+                return []
+            html = resp.read().decode("utf-8", errors="replace")
 
         # 简单正则提取（避免依赖 BeautifulSoup）
-        # 匹配书名
         titles = re.findall(r'<a href="https://book.douban.com/subject/\d+/"[^>]*title="([^"]+)"', html)
-        # 匹配评分
         ratings = re.findall(r'<span class="rating_nums">([\d.]+)</span>', html)
-        # 匹配作者信息
         infos = re.findall(r'<p class="pl">(.*?)</p>', html)
 
         for i, title in enumerate(titles[:count]):
             author = ""
             if i < len(infos):
-                # 作者信息格式: "作者 / 译者 / 出版社 / 年份 / 价格"
                 parts = infos[i].split("/")
                 if parts:
                     author = parts[0].strip()
 
+            rating = ratings[i] if i < len(ratings) else ""
             books.append({
                 "title": title.strip(),
                 "author": author,
                 "category": "",
-                "description": f"豆瓣 Top250，评分 {ratings[i] if i < len(ratings) else 'N/A'}",
+                "description": f"豆瓣 Top250，评分 {rating or 'N/A'}",
                 "tags": ["豆瓣Top250"],
-                "rating": ratings[i] if i < len(ratings) else "",
+                "rating": rating,
             })
 
         print(f"  [豆瓣Top250] 获取到 {len(books)} 本书")
@@ -192,13 +202,15 @@ def fetch_douban_top250(start: int = 0, count: int = 25) -> list[dict]:
 # 来源 2：AI 推荐
 # ============================================================
 
-BOOK_RECOMMEND_PROMPT = """请推荐 {count} 本适合做抖音短视频内容的{category}类书籍。
+BOOK_RECOMMEND_PROMPT = """我运营一个叫"书籍蒸馏"的抖音账号，定位是把一本书的精华蒸馏成几分钟短视频。
+
+请推荐 {count} 本适合做"书籍蒸馏"内容的{category}类书籍。
 
 要求：
-1. 选择有话题性、有核心金句、容易引起共鸣的书
+1. 选择信息密度高、有核心金句、能被高效提炼的书
 2. 优先选近10年出版的、知名度较高的书
-3. 每本书的简介要能让 AI 生成出有吸引力的短视频文案
-4. 避免过于学术或小众的书
+3. 每本书的简介要包含可以被"蒸馏"的核心观点或方法论
+4. 避免过于学术或小众的书，要让普通人也能快速吸收
 
 请严格按以下 JSON 格式返回（不要返回其他任何内容）：
 [
@@ -224,7 +236,13 @@ def recommend_books_with_ai(category: str, count: int = 10) -> list[dict]:
         # 提取 JSON
         json_match = re.search(r'\[.*\]', result, re.DOTALL)
         if json_match:
-            books = json.loads(json_match.group())
+            try:
+                books = json.loads(json_match.group())
+            except json.JSONDecodeError as e:
+                print(f"  [AI推荐] JSON 解析失败: {e}")
+                return []
+            if not isinstance(books, list):
+                return []
             for book in books:
                 book["category"] = category
                 if "tags" not in book:
@@ -347,8 +365,7 @@ def auto_fill_books(
 
 def ensure_enough_books() -> bool:
     """
-    检查书单余量，不够则自动补充
-
+    检查并确保有足够的待处理书籍。
     这个函数会在 main.py 的流水线中自动调用，
     确保永远有足够的待处理书籍。
 
@@ -365,7 +382,23 @@ def ensure_enough_books() -> bool:
     print("正在自动补充书单...\n")
 
     added = auto_fill_books()
-    return added > 0 or pending > 0
+
+    # 如果还是没有待处理的书，尝试将已完成的书重置为 pending，实现循环
+    if pending + added == 0:
+        done_count = sum(1 for b in books if b.get("status") == "done")
+        if done_count > 0:
+            print(f"无法获取新书，但发现 {done_count} 本已完成的书籍，正在重置状态以进行循环处理...")
+            for b in books:
+                if b.get("status") == "done":
+                    b["status"] = "pending"
+            save_book_list(books)
+            return True
+        else:
+            print("警告: 既无法获取新书，也没有已完成的书籍可以重置。")
+            return False
+
+    return True
+
 
 
 def show_book_stats():

@@ -155,7 +155,16 @@ VIDEO_BG_COLOR = (18, 18, 18)  # 深色背景
 # "cards"  — Pillow 生成的卡片画面(默认，无需外部资源)
 # "video"  — 应景视频素材 + 大字幕(最主流的知识类风格)
 # "digital_human" — 数字人口播(需要 DIGITAL_HUMAN_ENGINE)
-VIDEO_BG_MODE = "video"
+VIDEO_BG_MODE = "coze"
+
+# 新增：Coze API 配置 (当 VIDEO_BG_MODE = "coze" 时生效)
+# 国内版: https://www.coze.cn / 国际版: https://www.coze.com
+# 1. 注册 Coze，在个人中心创建/获取个人访问令牌 (Personal Access Token)
+# 2. 创建一个工作流(Workflow)，发布后获取其 ID
+COZE_API_KEY = os.getenv("COZE_API_KEY", "")
+COZE_WORKFLOW_ID = os.getenv("COZE_WORKFLOW_ID", "")
+COZE_API_BASE = os.getenv("COZE_API_BASE", "https://api.coze.cn/v1")  # 国内版
+COZE_API_TIMEOUT = 180  # Coze 视频生成通常需要1-3分钟，设置长一点的超时
 
 # ---- 视频素材配置(VIDEO_BG_MODE = "video" 时生效) ----
 # 素材来源优先级: 本地目录 → Pexels API 在线搜索

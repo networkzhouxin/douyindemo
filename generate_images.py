@@ -252,7 +252,8 @@ def create_book_cover_card(
         mid = len(title_text) // 2
         title_text = title_text[:mid] + "\n" + title_text[mid:]
 
-    bbox = draw.multiline_textbbox((0, 0), title_text, font=title_font)
+    # 手动计算居中位置，因为 multiline_text 不支持 anchor
+    bbox = draw.multiline_textbbox((0, 0), title_text, font=title_font, align="center")
     text_w = bbox[2] - bbox[0]
     draw.multiline_text(
         ((width - text_w) // 2, 140),

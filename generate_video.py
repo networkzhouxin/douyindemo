@@ -142,6 +142,81 @@ def find_bgm(book: dict = None, script: str = None) -> Path | None:
     return None
 
 
+def _enhance_prompt_for_coze(text: str, book_title: str) -> str:
+    """使用项目配置的 LLM 将简单的文案优化为高质量的视频 Prompt"""
+    from config import LLM_PROVIDER
+
+    print(f"  [Prompt 优化] 正在为 “{text[:20]}...” 生成高质量视频描述...")
+
+    # 这个模板可以持续优化，以达到最佳视频效果
+    prompt_template = f"""你是一位顶级的视觉艺术家和电影导演。请将以下这段关于《{book_title}》的文字描述，转化为一段极其详细、富有电影感的视觉画面提示词（Prompt），用于输入AI视频生成模型（如Sora、Kling或豆包）。
+
+文字描述: "{text}"
+
+你的任务是想象出最能体现这段文字内涵的画面，并遵循以下规则：
+1.  **具体化场景**: 将抽象概念转化为具体画面。例如，"认知觉醒" 可以转化为 "大脑的神经网络被金色光线逐个点亮"。
+2.  **指定风格**: 强调画质和艺术风格，例如 "8K分辨率, 电影级光效, 超广角镜头, 赛博朋克风格, 柔和的自然光"。
+3.  **描述运镜**: 加入镜头语言，如 "镜头缓慢向前推进", "从低角度仰拍", "无人机航拍视角"。
+4.  **丰富细节**: 补充环境、人物、情绪等细节，让画面更生动。
+5.  **直接输出**: 请只返回优化后的提示词正文，不要包含任何解释或标题。
+
+优化后的提示词:"""
+
+    try:
+        if LLM_PROVIDER == "claude":
+            from book_crawler import _call_claude
+            enhanced_prompt = _call_claude(prompt_template)
+        else:
+            from book_crawler import _call_openai
+            enhanced_prompt = _call_openai(prompt_template)
+
+        print("  [Prompt 优化] 完成!")
+        return enhanced_prompt.strip()
+    except Exception as e:
+        print(f"  [警告] Prompt 优化失败: {e}。将使用原始文本作为 Prompt。")
+        return f"电影质感, 高清晰度, 竖屏, 《{book_title}》, {text}"
+
+
+def _build_coze_video_background(script: str, book_title: str, duration: float):
+    """使用 Coze API 生成并拼接视频背景"""
+    try:
+        from coze_api import generate_video_by_coze
+        from generate_images import split_script_to_segments
+        from moviepy import VideoFileClip, concatenate_videoclips, vfx
+
+        print("\n  [视频背景] 已切换到 Coze AI 视频生成模式")
+        segments = split_script_to_segments(script)
+
+        video_clips = []
+        for i, seg in enumerate(segments):
+            print(f"\n  [Coze] 正在为第 {i+1}/{len(segments)} 段视频生成画面...")
+
+            # 1. 本地优化 Prompt
+            enhanced_prompt = _enhance_prompt_for_coze(seg, book_title)
+
+            # 2. 调用 Coze API
+            clip_path = generate_video_by_coze(enhanced_prompt)
+
+            clip = VideoFileClip(str(clip_path)).resized(height=VIDEO_HEIGHT)
+            clip = clip.with_position(("center", "center"))
+            video_clips.append(clip)
+
+        # 拼接所有 Coze 生成的视频片段
+        bg_video = concatenate_videoclips(video_clips)
+
+        # 时长适配
+        if bg_video.duration < duration:
+            bg_video = bg_video.with_effects([vfx.Loop(duration=duration)])
+        else:
+            bg_video = bg_video.subclipped(0, duration)
+
+        return bg_video, video_clips # 返回主背景和需要关闭的子片段列表
+
+    except Exception as e:
+        print(f"  [警告] Coze AI 视频生成失败: {e}")
+        return None, []
+
+
 def generate_video(
     voice_path: str | Path,
     subtitle_path: str | Path | None = None,
@@ -215,7 +290,17 @@ def generate_video(
             except ImportError:
                 print("  数字人模块不可用，降级为其他模式")
 
-        # 方案B: 应景视频素材 + 大字幕（最主流知识类风格）
+        # 方案B: Coze AI 生成视频背景
+        if not _bg_ready and VIDEO_BG_MODE == "coze":
+            bg_video, coze_clips = _build_coze_video_background(script, book_title, duration)
+            if bg_video:
+                clips_to_close.extend(coze_clips)
+                layers = [bg_video]
+                _bg_ready = True
+            else:
+                print("  [回退] Coze 生成失败，自动切换到卡片模式")
+
+        # 方案C: 应景视频素材 + 大字幕（最主流知识类风格）
         if not _bg_ready and VIDEO_BG_MODE in ("video", "digital_human"):
             bg_clip = _build_video_background(category, duration, voice_path.parent)
             if bg_clip is not None:
@@ -231,7 +316,7 @@ def generate_video(
                 print("  使用视频素材背景")
                 _bg_ready = True
 
-        # 方案C: 卡片画面（兜底）
+        # 方案D: 卡片画面（兜底）
         if not _bg_ready:
             frame_paths = _generate_frames(book_title, book_author, category, script, voice_path.parent)
             bg_video = _build_frame_sequence(frame_paths, duration)

@@ -358,7 +358,8 @@ def generate_voice_gpt_sovits(text: str, output_path: Path):
 
     try:
         req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        # 增加超时时间到 300 秒(5分钟)，防止长文案合成超时
+        with urllib.request.urlopen(req, timeout=300) as resp:
             audio_data = resp.read()
 
         # 1. 先保存原始音频
@@ -366,15 +367,15 @@ def generate_voice_gpt_sovits(text: str, output_path: Path):
         with open(raw_path, "wb") as f:
             f.write(audio_data)
 
-        # 2. 使用 FFmpeg 自动切除末尾和开头的静音 (静音阈值 -50dB，持续 0.5s 以上视为静音)
-        # silenceremove=start_periods=1:start_threshold=-50dB:stop_periods=-1:stop_duration=0.5:stop_threshold=-50dB
+        # 2. 使用 FFmpeg 自动切除末尾和开头的静音 (静音阈值 -50dB，持续 0.3s 以上视为静音)
+        # silenceremove=start_periods=1:start_threshold=-50dB:stop_periods=-1:stop_duration=0.3:stop_threshold=-50dB
         import subprocess
         import shutil
 
         ffmpeg_cmd = [
             "ffmpeg", "-y",
             "-i", str(raw_path),
-            "-af", "silenceremove=start_periods=1:start_threshold=-50dB:stop_periods=-1:stop_duration=0.5:stop_threshold=-50dB",
+            "-af", "silenceremove=start_periods=1:start_threshold=-50dB:stop_periods=-1:stop_duration=0.3:stop_threshold=-50dB",
             str(output_path)
         ]
         

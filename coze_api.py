@@ -1,5 +1,5 @@
 """
-Coze API 极简同步视频生成模块
+Coze API 极简同步视频生成模块 (超长超时版)
 
 功能:
 1. 直接调用 Coze Workflow API (同步模式)
@@ -22,13 +22,12 @@ from config import (
     OUTPUT_DIR
 )
 
-
 class CozeError(Exception):
     pass
 
 
-def _call_coze_api(payload: dict, timeout: int = 120) -> dict:
-    """直接调用同步运行工作流接口"""
+def _call_coze_api(payload: dict, timeout: int = 600) -> dict:
+    """直接调用同步运行工作流接口，默认超时 600 秒 (10 分钟)"""
     if not COZE_API_KEY:
         raise CozeError("COZE_API_KEY 未配置")
     if not COZE_WORKFLOW_ID:
@@ -48,12 +47,12 @@ def _call_coze_api(payload: dict, timeout: int = 120) -> dict:
     payload["workflow_id"] = COZE_WORKFLOW_ID
     data = json.dumps(payload).encode("utf-8")
 
-    print(f"  [Coze API] 正在发起视频生成请求 (同步等待模式，预计耗时 30-90s)...")
+    print(f"  [Coze API] 发起视频生成请求 (同步模式, 最大等待 {timeout}s)...")
     
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     
     try:
-        # 视频生成较慢，我们将请求超时设为 120 秒
+        # 并发视频生成极其缓慢，强制拉长超时时间
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             response_text = resp.read().decode()
             if resp.status != 200:
@@ -64,13 +63,12 @@ def _call_coze_api(payload: dict, timeout: int = 120) -> dict:
         raise CozeError(f"调用 Coze API 失败: HTTP Error {e.code}, 响应: {error_body}") from e
     except Exception as e:
         if "time" in str(e).lower() and "out" in str(e).lower():
-            raise CozeError(f"请求超时({timeout}秒)，AI 生成视频耗时过长，请检查 Coze 后台任务状态。") from e
+            raise CozeError(f"请求超时({timeout}秒)，并发视频生成任务排队中，建议减少 max_workers 或增加超时时间。") from e
         raise CozeError(f"调用 Coze API 失败: {e}") from e
 
 
 def download_video(video_url: str, save_dir: Path) -> Path:
     """从 URL 下载视频到指定目录"""
-    # 过滤掉 URL 参数获取纯净文件名
     filename = Path(video_url.split("?")[0]).name
     if not filename or not filename.endswith(".mp4"):
         filename = f"coze_video_{int(time.time())}.mp4"
@@ -78,13 +76,13 @@ def download_video(video_url: str, save_dir: Path) -> Path:
     save_path = save_dir / filename
     save_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"  [Coze] 正在下载视频 -> {save_path}")
+    print(f"  [Coze] 正在下载视频 -> {save_path.name}")
     
     req = urllib.request.Request(video_url, headers={'User-Agent': 'Mozilla/5.0'})
     with urllib.request.urlopen(req) as resp, open(save_path, 'wb') as f:
         f.write(resp.read())
         
-    print("  [Coze] 下载完成!")
+    print(f"  [Coze] 下载完成! ({save_path.name})")
     return save_path
 
 
@@ -101,28 +99,26 @@ def generate_video_by_coze(prompt: str, user: str = "python_client") -> Path:
         }
     }
     
-    response = _call_coze_api(payload)
+    response = _call_coze_api(payload, timeout=600)
     
     if response.get("code") != 0:
         raise CozeError(f"工作流运行失败: {response.get('msg')}")
     
-    # 核心：Coze 工作流返回的结果在 data 字段中，且通常是一个 JSON 字符串
+    # 解析 data 里的内容
     raw_data = response.get("data")
     if not raw_data:
         raise CozeError("API 返回结果中没有 data 数据")
     
     try:
-        # 尝试解析 data 里的 JSON
         result = json.loads(raw_data)
     except json.JSONDecodeError:
-        # 如果不是 JSON，可能直接就是结果内容（较少见）
         raise CozeError(f"无法解析 data 字段为 JSON: {raw_data}")
 
-    # 寻找视频 URL (兼容 download_url 和 video_url)
+    # 寻找视频 URL
     video_url = result.get("download_url") or result.get("video_url")
     
     if not video_url:
-        raise CozeError(f"工作流输出中未找到视频链接。当前输出为: {raw_data}。请检查工作流结束节点的变量名是否为 download_url 或 video_url。")
+        raise CozeError(f"工作流输出中未找到视频链接。当前输出为: {raw_data}。请检查工作流结束节点的变量名。")
         
     # 保存到临时目录
     temp_dir = OUTPUT_DIR / "_temp" / "coze_videos"

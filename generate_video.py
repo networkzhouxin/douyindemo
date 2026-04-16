@@ -178,42 +178,55 @@ def _enhance_prompt_for_coze(text: str, book_title: str) -> str:
 
 
 def _build_coze_video_background(script: str, book_title: str, duration: float):
-    """使用 Coze API 生成并拼接视频背景"""
+    """使用 Coze API 并发生成并拼接视频背景"""
     try:
         from coze_api import generate_video_by_coze
         from generate_images import split_script_to_segments
         from moviepy import VideoFileClip, concatenate_videoclips, vfx
-
-        print("\n  [视频背景] 已切换到 Coze AI 视频生成模式")
+        from concurrent.futures import ThreadPoolExecutor
+        
+        print("\n  [视频背景] 已切换到 Coze AI 并发生成模式 (Max Workers: 4)")
         segments = split_script_to_segments(script)
-
-        video_clips = []
-        for i, seg in enumerate(segments):
-            print(f"\n  [Coze] 正在为第 {i+1}/{len(segments)} 段视频生成画面...")
-
+        total_segs = len(segments)
+        
+        # 内部函数：用于线程池执行
+        def process_segment(index_seg_tuple):
+            idx, seg = index_seg_tuple
+            print(f"  [Coze并发] 任务提交: 第 {idx+1}/{total_segs} 段...")
             # 1. 本地优化 Prompt
             enhanced_prompt = _enhance_prompt_for_coze(seg, book_title)
-
-            # 2. 调用 Coze API
+            # 2. 调用 Coze API (耗时操作)
             clip_path = generate_video_by_coze(enhanced_prompt)
+            return idx, clip_path
 
-            clip = VideoFileClip(str(clip_path)).resized(height=VIDEO_HEIGHT)
-            clip = clip.with_position(("center", "center"))
-            video_clips.append(clip)
+        # 使用线程池并发执行
+        video_clips_map = {}
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            # 提交所有任务
+            futures = [executor.submit(process_segment, (i, seg)) for i, seg in enumerate(segments)]
+            # 收集结果
+            for future in futures:
+                idx, clip_path = future.result()
+                clip = VideoFileClip(str(clip_path)).resized(height=VIDEO_HEIGHT)
+                clip = clip.with_position(("center", "center"))
+                video_clips_map[idx] = clip
+
+        # 按顺序排列片段
+        video_clips = [video_clips_map[i] for i in range(total_segs)]
 
         # 拼接所有 Coze 生成的视频片段
         bg_video = concatenate_videoclips(video_clips)
-
+        
         # 时长适配
         if bg_video.duration < duration:
             bg_video = bg_video.with_effects([vfx.Loop(duration=duration)])
         else:
             bg_video = bg_video.subclipped(0, duration)
-
+            
         return bg_video, video_clips # 返回主背景和需要关闭的子片段列表
-
+        
     except Exception as e:
-        print(f"  [警告] Coze AI 视频生成失败: {e}")
+        print(f"  [警告] Coze AI 并发视频生成失败: {e}")
         return None, []
 
 
@@ -332,10 +345,10 @@ def generate_video(
                 max_chars = 12 if is_video_bg else 15
                 subs = group_subtitles(raw_subs, max_chars=max_chars)
 
-                # 视频背景模式：字幕更大更醒目，居中偏下
-                sub_font_size = int(SUBTITLE_FONT_SIZE * 1.3) if is_video_bg else SUBTITLE_FONT_SIZE
+                # 视频背景模式：字幕大小适中，增加边距防止遮挡
+                sub_font_size = int(SUBTITLE_FONT_SIZE * 1.15) if is_video_bg else SUBTITLE_FONT_SIZE
                 sub_stroke_width = SUBTITLE_STROKE_WIDTH + 1 if is_video_bg else SUBTITLE_STROKE_WIDTH
-                sub_y_pos = int(VIDEO_HEIGHT * 0.55) if is_video_bg else int(VIDEO_HEIGHT * 0.65)
+                sub_y_pos = int(VIDEO_HEIGHT * 0.75) # 调低位置，防止遮挡画面中心
 
                 for sub in subs:
                     sub_clip = (
@@ -346,9 +359,10 @@ def generate_video(
                             font=font,
                             stroke_color=SUBTITLE_STROKE_COLOR,
                             stroke_width=sub_stroke_width,
-                            size=(VIDEO_WIDTH - 120, None),
+                            size=(VIDEO_WIDTH - 240, None), # 进一步增加边距(240)，确保文字不贴边
                             method="caption",
                             text_align="center",
+                            vertical_align="center",
                         )
                         .with_start(sub["start"])
                         .with_end(sub["end"])
@@ -381,7 +395,7 @@ def generate_video(
         final_audio = CompositeAudioClip(audio_tracks)
         video = video.with_audio(final_audio)
 
-        # 7. 导出（保存到语音文件所在目录，即当前集的目录）
+        # 7. 导出
         output_dir = voice_path.parent
         output_path = output_dir / "video.mp4"
 
@@ -390,9 +404,11 @@ def generate_video(
             fps=VIDEO_FPS,
             codec="libx264",
             audio_codec="aac",
+            bitrate="6000k", # 设定高码率
             threads=4,
             preset="medium",
             logger="bar",
+            ffmpeg_params=["-crf", "20"] # 使用 CRF 模式保证极高质量和流畅度
         )
 
         return output_path
